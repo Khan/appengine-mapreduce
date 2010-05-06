@@ -1,0 +1,7 @@
+#Getting started with mapreduce library.
+
+= Getting Started =
+
+See getting started guide for your language of choice:
+  * [GettingStartedPython Getting Started In Python]
+  * [GettingStartedJava Getting Started In Java]

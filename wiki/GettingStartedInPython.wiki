@@ -1,6 +1,6 @@
 #summary Getting started guide for python mapper library
 
-== Adding MapReduce Library To Your Application ==
+== Adding !MapReduce Library To Your Application ==
 
 Checkout the mapreduce folder into your application directory:
 
@@ -85,7 +85,7 @@ class ClassAttendance(db.Model):
   when = db.DateTimeProperty(required=True)
 }}}
 
-If you know you only have a single UserKind per LDAP, then you can Map over the UserKind and have a map function like this:
+If you know you only have a single !UserKind per LDAP, then you can Map over the !UserKind and have a map function like this:
 
 {{{
 def find_attendance(user_entity):

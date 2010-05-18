@@ -1,6 +1,6 @@
 #summary Getting started guide for python mapper library
 
-== Adding !MapReduce Library To Your Application ==
+== Adding the !MapReduce Library To Your Application ==
 
 Checkout the mapreduce folder into your application directory:
 
@@ -46,7 +46,7 @@ Click the launch button to start registered mapreduce. Go to the mapreduce detai
 
 
 ==Modifying Datastore entities in the Mapper==
-Mapper code can perform any kind of activity. But it's much more efficient to yield datastore mutation operations than to modify datastore directly:
+Mapper code can perform any kind of activity. But it's much more efficient to yield datastore mutation operations than to modify the datastore directly:
 
 {{{
 from mapreduce import operation as op
@@ -69,6 +69,24 @@ def process(entity):
  yield op.counter.Increment("counter2", 30)
  yield op.counter.Increment("counter3", -5)
 }}}
+
+==Custom mapper parameters==
+
+The entries in the 'params' section of mapreduce.yaml are used to define per-mapper parameters. They're used by the input readers - for example, the 'entity_kind' key above is used by the default datastore reader - but they can also be used to pass arguments to your mapper, as well.
+
+User parameters for the mapper can be accessed via the 'context' module:
+
+{{{
+from mapreduce import context
+
+def process(entity):
+  ctx = context.get()
+  params = ctx.mapreduce_spec.mapper.params
+  my_mapper_arg = params['my_mapper_arg']
+  # Process the entity
+}}}
+
+Note that all mapper parameters are strings, so if you need an integer or other datatype, you will need to convert it yourself.
 
 ==Doing per-row “reduces”==
 
@@ -102,13 +120,50 @@ def find_attendance(user_entity):
 
 Currently we do not support transactions in the map function, so the Put operations yielded here will blindly overwrite any other data in the Datastore. For now it's best to be careful and stop live traffic from accessing these entities while a background job is running. We'll be adding transactions soon.
 
+==Specifying readers==
+The mapreduce library isn't restricted to mapping over datastore entities. It comes bundled with other input readers, defined in mapreduce/input_readers.py. Currently, this includes !DatastoreInputReader (the default), !BlobstoreLineInputReader, which maps over lines from one or more blobs in the blobstore, and !BlobstoreZipInputReader, which maps over the contents of zip files in the blobstore.
+
+This example mapreduce.yaml demonstrates how to specify an alternate input reader:
+
+{{{
+mapreduce:
+- name: Codesearch
+  mapper:
+    input_reader: mapreduce.input_readers.BlobstoreZipInputReader
+    handler: <your handler function>
+    params:
+    - name: blob_key
+}}}
+
+Different input readers may have different required params, and provide data to the mapper in different forms. See the docstrings in the input_readers.py file for details.
+
+==Validator functions==
+It is also possible to specify a validator function, which will be run before starting the mapreduce, passed the user parameters specified for this mapreduce, and given the opportunity to validate and modify them.
+
+To use a validator function, specify it in your mapreduce spec with the 'params_validator' key:
+
+{{{
+mapreduce:
+- name: Codesearch
+  mapper:
+    handler: <your handler>
+    params:
+    - name: file_id
+    params_validator: <your validator function>
+}}}
+
+The validator function should accept a single argument, the dict of user params, which it may modify:
+
+{{{
+def my_validator(user_params):
+  file_id = user_params['file_id']
+  user_params['blob_key'] = File.get_by_id(int(file_id)).blob_key
+}}}
 
 ==Not Documented==
 
   * Shards count specification
-  * Custom mapper parameters
   * Error handling
-  * Blob readers
 
 == Current Limitations ==
 

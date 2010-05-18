@@ -167,4 +167,4 @@ def my_validator(user_params):
 
 == Current Limitations ==
 
-  * Only full range scan is supported, i.e. it's impossible to scan some entity subset
+  * Only full range scan is supported, i.e. it's impossible to scan some entity subset. However, you can supply {{{'keys_only': true}}} to the !DatastoreInputReader to make it return keys rather than entities.

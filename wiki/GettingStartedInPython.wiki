@@ -12,7 +12,7 @@ Add the mapreduce handler to your app.yaml:
 
 {{{
 handlers:
-- url: /mapreduce/.*
+- url: /mapreduce(/.*)?
   script: mapreduce/main.py
   login: admin
 }}}

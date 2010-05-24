@@ -32,7 +32,7 @@ Register the mapper in mapreduce.yaml:
 mapreduce:
 - name: <Some descriptive name for UI>
   mapper:
-    input_reader: mapreduce.DatastoreInputReader
+    input_reader: mapreduce.input_readers.DatastoreInputReader
     handler: <your handler name, e.g. main.process>
     params:
     - name: entity_kind

@@ -14,7 +14,7 @@ Build the appropriate jar using ant in the directory you just checked out:
 ant
 }}}
 
-Copy the resulting jars into your application's WEB-INF/lib directory. If you're already using any of the dependency jars, there's no need to have duplicates.
+Copy the resulting jars in the dist/lib directory into your application's WEB-INF/lib directory. If you're already using any of the dependency jars, there's no need to have duplicates.
 
 Add the mapreduce handler to your app.xml:
 

@@ -1,0 +1,45 @@
+#summary Getting started guide for python mapper library
+
+== Adding the !MapReduce Library To Your Application ==
+
+Checkout the mapreduce folder to a separate directory:
+
+{{{
+svn checkout http://appengine-mapreduce.googlecode.com/svn/trunk/java
+}}}
+
+Build the appropriate jar using ant in the directory you just checked out:
+
+{{{
+ant
+}}}
+
+Copy the resulting jars into your application's WEB-INF/lib directory. If you're already using any of the dependency jars, there's no need to have duplicates.
+
+Add the mapreduce handler to your app.xml:
+
+{{{
+<servlet>
+  <servlet-name>mapreduce</servlet-name>
+  <servlet-class>com.google.appengine.tools.mapreduce.MapReduceServlet</servlet-class>
+</servlet>
+<servlet-mapping>
+  <servlet-name>mapreduce</servlet-name>
+  <url-pattern>/mapreduce/*</url-pattern>
+</servlet-mapping>
+}}}
+
+== Defining a Mapper ==
+
+Create a class implementing !AppEngineMapper. You can see an example of such a class [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestMapper.java here].
+
+There are two ways to start a mapper. You can either programmatically create a Configuration as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestServlet.java here], or you can define a template using the mapreduce.xml as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/WEB-INF/mapreduce.xml here]. There is a description of the mapreduce.xml format in the [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/ConfigurationTemplatePreprocessor.java javadoc for the ConfigurationTemplatePreprocessor class].
+
+==Running the Mapper==
+
+If you create a mapper using the configuration template approach, then you can start the mapper by navigating your browser to `http://<your_app_id>.appspot.com/mapreduce/`
+Click the launch button to start registered mapreduce. Go to the mapreduce detail page to observe its status and control its execution.
+
+== Current Limitations ==
+
+  * Only full range scan is supported, i.e. it's impossible to scan some entity subset.

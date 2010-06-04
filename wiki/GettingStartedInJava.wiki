@@ -33,7 +33,7 @@ Add the mapreduce handler to your app.xml:
 
 Create a class implementing !AppEngineMapper. You can see an example of such a class [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestMapper.java here].
 
-There are two ways to start a mapper. You can either programmatically create a Configuration as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestServlet.java here], or you can define a template using the mapreduce.xml as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/WEB-INF/mapreduce.xml here]. There is a description of the mapreduce.xml format in the [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/ConfigurationTemplatePreprocessor.java javadoc for the ConfigurationTemplatePreprocessor class].
+There are two ways to start a mapper. You can either programmatically create a Configuration as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestServlet.java here], or you can define a template using mapreduce.xml as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/WEB-INF/mapreduce.xml here]. There is a description of the mapreduce.xml format in the [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/ConfigurationTemplatePreprocessor.java javadoc for the ConfigurationTemplatePreprocessor class].
 
 ==Running the Mapper==
 

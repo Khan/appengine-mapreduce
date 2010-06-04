@@ -37,7 +37,7 @@ There are two ways to start a mapper. You can either programmatically create a C
 
 ==Running the Mapper==
 
-If you create a mapper using the configuration template approach, then you can start the mapper by navigating your browser to `http://<your_app_id>.appspot.com/mapreduce/`
+If you create a mapper using the configuration template approach, then you can start the mapper by navigating your browser to `http://<your_app_id>.appspot.com/mapreduce/status`
 Click the launch button to start registered mapreduce. Go to the mapreduce detail page to observe its status and control its execution.
 
 == Current Limitations ==

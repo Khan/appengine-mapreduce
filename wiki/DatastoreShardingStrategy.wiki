@@ -1,0 +1,13 @@
+#summary Describes the strategy that the !DatastoreInputReader uses to create shards.
+
+== Basic Strategy ==
+
+At the moment we're assuming that the keys for the entity to be sorted are roughly uniformly distributed when considered lexicographically. For instance, if we the first key was 'a' and the last key was 'e' and we wanted two splits, we know that the first split must start at 'a' and the last split must end with 'e' (although in practice we just let the last split extend indefinitely). Since we want two splits, we need to find a midpoint between the two endpoints. Given our uniform distribution assumption, we see that 'a' is the first letter of the alphabet, 'e' is the fifth letter of the alphabet, and so we would expect the midpoint of our keys to be around the third letter of the alphabet, 'c'. This gives us splits ['a'...'c') and ['c'...) (both inclusive on the left and exclusive on the right). 
+
+Suppose we're looking for two splits and our minimum and maximum keys are 'a' and 'b'. We need a midpoint, but there's no letter between 'a' and 'b'. We resolve this by assuming that since 'a' and 'b' are both in the ASCII range, it's likely that the second letters are too. So we find the middle letter in the ASCII range (127/2) and append it to our minimum ('a'), and our splits are ['a'...'a' + (127/2)) and ['a' + (127/2)...).
+
+There are some more nuances, but they're mostly edge cases and shouldn't come into play in normal use. Feel free to take a look at the code for the datastore input reader and its associated test cases in the language of your choice if you want more info.
+
+== Finding the last key ==
+
+In order for this strategy to work, we need to know the last key, so we can divide up the space. Both the Python and the Java implementation can use a descending index on __key__ to find the last key. Python also has a heuristic for finding the last key without the index. We hope to port the heuristic to the Java implementation soon.

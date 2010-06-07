@@ -1,4 +1,4 @@
-#summary Getting started guide for python mapper library
+#summary Getting started guide for Java mapper library
 
 == Adding the !MapReduce Library To Your Application ==
 

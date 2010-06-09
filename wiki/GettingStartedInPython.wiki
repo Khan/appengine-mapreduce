@@ -64,9 +64,9 @@ To change counter value yield a counter operation:
 {{{
 from mapreduce import operation as op
 def process(entity):
- yield op.counter.Increment("counter1")
- yield op.counter.Increment("counter2", 30)
- yield op.counter.Increment("counter3", -5)
+ yield op.counters.Increment("counter1")
+ yield op.counters.Increment("counter2", 30)
+ yield op.counters.Increment("counter3", -5)
 }}}
 
 ==Custom mapper parameters==

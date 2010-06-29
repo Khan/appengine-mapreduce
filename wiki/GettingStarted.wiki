@@ -1,3 +1,3 @@
 See getting started guide for your language of choice:
-  * [GettingStartedPython Getting Started In Python]
-  * [GettingStartedJava Getting Started In Java]
+  * [GettingStartedInPython Getting Started In Python]
+  * [GettingStartedInJava Getting Started In Java]

@@ -1,4 +1,5 @@
 #summary Getting started guide for python mapper library
+#labels Featured
 
 == Adding the !MapReduce Library To Your Application ==
 

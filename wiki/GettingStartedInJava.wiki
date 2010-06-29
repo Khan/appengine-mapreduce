@@ -41,23 +41,5 @@ There are two ways to start a mapper. You can either programmatically create a C
 If you create a mapper using the configuration template approach, then you can start the mapper by navigating your browser to `http://<your_app_id>.appspot.com/mapreduce/status`
 Click the launch button to start registered mapreduce. Go to the mapreduce detail page to observe its status and control its execution.
 
-==Configuration Parameters==
-You can set the following in your configuration to customize mapper behavior:
-
-|| *key* || **default value** || **explanation** ||
-|| mapreduce.mapper.inputprocessingrate || 1000 || The aggregate number of entities processed per second by all mappers. Used to prevent large amounts of quota being used up in a short time period. ||
-|| mapreduce.mapper.shardcount || 8 || The number of concurrent workers to use. This also determines the number of shards to split the input into. ||
-|| mapreduce.appengine.donecallback.url || None || A url in the format accepted by the task queue constructor to call after the. The given url is sent a POST request with a paremeter of job_id, set to the completed MR's job ID. || 
-
-Additionally, each input format has its own configuration options:
-
-There is currently only one input format: [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/DatastoreInputFormat.java DatastoreInputFormat]. Its options are:
-
-|| *key* || **default value** || **explanation** ||
-|| mapreduce.mapper.inputformat.datastoreinputformat.entitykind || None || The datastore entity to map over. ||
-
-== Current Java Limitations ==
-The following limitations apply to the current implementation. We're working to remove all of them:
-  * Only full range scan is supported, i.e. it's impossible to scan some entity subset.
-  * The entity to be mapped must have a descending index on __key__. There is support for guessing the key range in the Python implementation, and we plan to add that same strategy to the Java implementation.
-  * Sharding is currently done by splitting the space of keys lexicographically. For instance, suppose you have the keys 'a', 'ab', 'ac', and 'e' and you request two splits. The framework will find that the first key is 'a' and the last key is 'e'. 'a' is the first letter and 'e' is the fifth, so the middle is 'c'. Therefore, the two splits are ['a'...'c') and ['c'...), with the first split containing 'a', 'ab', and 'ac', and the last split only containing 'e'.
+==Further Reading==
+You can get more information about optional parameters, batch datastore mutations, and more at the [UserGuideJava Java User Guide]

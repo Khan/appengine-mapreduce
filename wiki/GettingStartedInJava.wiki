@@ -17,7 +17,7 @@ ant
 
 Copy the resulting jars in the dist/lib directory into your application's WEB-INF/lib directory. If you're already using any of the dependency jars, there's no need to have duplicates.
 
-Add the mapreduce handler to your app.xml:
+Add the mapreduce handler to your web.xml:
 
 {{{
 <servlet>

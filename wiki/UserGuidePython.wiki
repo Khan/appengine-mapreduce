@@ -45,14 +45,26 @@ mapreduce:
 
 == Provided Input Readers ==
 
+
 === !DatastoreInputReader ===
 
-!DatastoreInputReader Reads all model instances of a particular kind from the datastore. If the keys_only parameter is false (the default), then it calls the mapper once with each model instance. If key_onlys is true, then it calls the mapper once with each key.
+!DatastoreInputReader Reads all model instances of a particular kind from the datastore. 
+It requires entity_kind class to be defined.
 
 || *Parameter* || *Default value* || *Explanation* ||
 || entity_kind || None || The datastore kind to map over. ||
 || batch_size || 50 || The number of entities to read from the datastore with each batch get. ||
-|| keys_only || False || If True, then give the mapper only keys rather than full model instances. ||
+
+
+=== !DatastoreKeyInputReader ===
+
+!DatastoreKeyInputReader reads keys of entities of a particular kind from the datastore. 
+It doesn't require entity_kind class to be defined.
+
+|| *Parameter* || *Default value* || *Explanation* ||
+|| entity_kind || None || The datastore kind to map over. ||
+|| batch_size || 50 || The number of entities to read from the datastore with each batch get. ||
+
 
 === !BlobstoreLineInputReader ===
 
@@ -61,12 +73,14 @@ mapreduce:
 || *Parameter* || *Default value* || *Explanation* ||
 || blob_keys || None || Either a string containing a blob key string or an array containing multiple blob key strings. ||
 
+
 === !BlobstoreZipInputReader ===
 
 !BlobstoreZipInputReader iterates over all compressed files in a zipfile in Blobstore. It calls the mapper once for each file, passing it the tuple comprised of the zipfile.!ZipInfo entry for the file, and a callable that returns the complete body of the file as a string. In other words: (zipinfo, file_callable).
 
 || *Parameter* || *Default value* || *Explanation* ||
 || blob_key || None || A string containing a blob key. ||
+
 
 ==Doing per-row “reduces”==
 

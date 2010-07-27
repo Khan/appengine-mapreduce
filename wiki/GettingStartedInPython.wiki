@@ -40,10 +40,12 @@ mapreduce:
       default: <your entity name, e.g. main.MyEntity>
 }}}
 
+mapreduce.yaml should be saved in the root directory of your app (app.yaml file directory).
+
 ==Running the Mapper==
 
 Navigate your browser to `http://<your_app_id>.appspot.com/mapreduce/`
-Click the launch button to start registered mapreduce. Go to the mapreduce detail page to observe its status and control its execution.
+Click the launch button to start registered mapreduce. Go to the mapreduce detail page to see its status and control its execution.
 
 ==Modifying Datastore entities in the Mapper==
 Mapper code can perform any kind of activity. But it's much more efficient to yield datastore mutation operations than to modify the datastore directly:

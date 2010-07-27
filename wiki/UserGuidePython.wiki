@@ -1,12 +1,34 @@
 #summary User guide for python mapreduce library
 
-==Basics==
+<wiki:toc max_depth="1" />
+
+= Basics =
 
 See [GettingStartedInPython Getting Started] guide for the basics of library usage.
 
-==Custom mapper parameters==
+= Mapreduce parameters =
 
-The entries in the 'params' section of mapreduce.yaml are used to define per-mapper parameters. They're used by the input readers - for example, the 'entity_kind' key above is used by the default datastore reader - but they can also be used to pass arguments to your mapper, as well.
+You can define job-level parameters using the 'params' entry for the mapreduce to control job execution. The following parameters are now supported
+
+|| *Key* || *Default value* || *Explanation* ||
+|| done_callback || None || The url callback to call when mapreduce finishes its execution ||
+
+Example:
+
+{{{
+mapreduce:
+- name: Make messages lowercase
+  params:
+  - name: done_callback
+    value: /done
+  mapper:
+    handler: main.lower_case_posts
+    input_reader: mapreduce.input_readers.DatastoreInputReader
+}}}
+
+= Mapper parameters =
+
+The entries in the 'params' section of mapreduce.yaml are used to define per-mapper parameters. They're also used by the input readers - for example, the 'entity_kind' key above is used by the default datastore reader - but they can also be used to pass arguments to your mapper, as well.
 
 User parameters for the mapper can be accessed via the 'context' module:
 
@@ -28,7 +50,7 @@ Additionally, the following parameters, specified directly in the mapper spec ar
 || shard_count || 8 || The number of concurrent mapper workers to run at once. ||
 || processing_rate || 100 || The aggregate maximum number of inputs processed per second by all mappers. Can be used to avoid using up all quota, interfering with online users. ||
 
-==Specifying readers==
+= Specifying readers =
 The mapreduce library isn't restricted to mapping over datastore entities. It comes bundled with other input readers, defined in mapreduce/input_readers.py. Currently, this includes !DatastoreInputReader (the default), !BlobstoreLineInputReader, which maps over lines from one or more blobs in the blobstore, and !BlobstoreZipInputReader, which maps over the contents of zip files in the blobstore.
 
 This example mapreduce.yaml demonstrates how to specify an alternate input reader:
@@ -82,7 +104,7 @@ It doesn't require entity_kind class to be defined.
 || blob_key || None || A string containing a blob key. ||
 
 
-==Doing per-row “reduces”==
+= Doing per-row “reduces” =
 
 We don’t have the reduce capability yet, but you can approximate this if you have an Entity kind with a unique constraint on a particular filter. For example, say we had these entity kinds:
 
@@ -114,7 +136,7 @@ def find_attendance(user_entity):
 
 Currently we do not support transactions in the map function, so the Put operations yielded here will blindly overwrite any other data in the Datastore. For now it's best to be careful and stop live traffic from accessing these entities while a background job is running. We'll be adding transactions soon.
 
-==Validator functions==
+= Validator functions =
 It is also possible to specify a validator function, which will be run before starting the mapreduce, passed the user parameters specified for this mapreduce, and given the opportunity to validate and modify them.
 
 To use a validator function, specify it in your mapreduce spec with the 'params_validator' key:
@@ -137,12 +159,16 @@ def my_validator(user_params):
   user_params['blob_key'] = File.get_by_id(int(file_id)).blob_key
 }}}
 
-==Not Documented==
+= Programmatically Starting Jobs =
+
+You can start mapreduce jobs from your code by using control api. See [control.py http://code.google.com/p/appengine-mapreduce/source/browse/trunk/python/src/mapreduce/control.py] file for more details. Control API can be used together with done callbacks to implement mapreduce chaining.
+
+
+= Not Yet Documented =
 
   * Error handling
-  * Done callbacks (http://code.google.com/p/appengine-mapreduce/source/detail?r=53)
-  * Control API (http://code.google.com/p/appengine-mapreduce/source/detail?r=40)
 
-== Current Limitations ==
+
+= Current Limitations =
 
   * Only full range scan is supported, i.e. it's impossible to scan a subset of a particular entity kind.

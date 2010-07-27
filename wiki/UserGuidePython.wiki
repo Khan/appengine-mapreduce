@@ -161,7 +161,7 @@ def my_validator(user_params):
 
 = Programmatically Starting Jobs =
 
-You can start mapreduce jobs from your code by using control api. See [control.py http://code.google.com/p/appengine-mapreduce/source/browse/trunk/python/src/mapreduce/control.py] file for more details. Control API can be used together with done callbacks to implement mapreduce chaining.
+You can start mapreduce jobs from your code by using control api. See [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/python/src/mapreduce/control.py control.py] file for more details. Control API can be used together with done callbacks to implement mapreduce chaining.
 
 
 = Not Yet Documented =

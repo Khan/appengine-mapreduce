@@ -3,7 +3,7 @@
 == Recent Python Library Changes ==
 
 Some notable changes in python library:
-  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=76 r76] makes job starting process more bullet proof by splitting it into two phases, and moving seconds phase to taskqueue
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=76 r76] makes job starting process more bulletproof by splitting it into two phases, and moving seconds phase to taskqueue
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=74 r74] adds support for key-only input reader
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=73 r73] adds support for BlobstoreZipLineInputReader
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=66 r66] restores all code comments in source files

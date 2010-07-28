@@ -167,6 +167,7 @@ You can start mapreduce jobs from your code by using control api. See [http://co
 = Not Yet Documented =
 
   * Error handling
+  * BlobstoreZipLineInputReader
 
 
 = Current Limitations =

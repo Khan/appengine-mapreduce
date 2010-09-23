@@ -7,7 +7,7 @@ You can set the following in your configuration to customize mapper behavior:
 || *key* || **default value** || **explanation** ||
 || mapreduce.mapper.inputprocessingrate || 1000 || The aggregate number of entities processed per second by all mappers. Used to prevent large amounts of quota being used up in a short time period. ||
 || mapreduce.mapper.shardcount || 8 || The number of concurrent workers to use. This also determines the number of shards to split the input into. ||
-|| mapreduce.appengine.donecallback.url || None || A url in the format accepted by the task queue constructor to call after the. The given url is sent a POST request with a paremeter of job_id, set to the completed MR's job ID. || 
+|| mapreduce.appengine.donecallback.url || None || A url in the format accepted by the task queue constructor to call after the mapper job is completed. The given url is sent a POST request with a paremeter of job_id, set to the completed MR's job ID. || 
 
 Additionally, each input format has its own configuration options:
 

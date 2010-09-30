@@ -36,6 +36,18 @@ Create a class implementing !AppEngineMapper. You can see an example of such a c
 
 There are two ways to configure a mapper. You can either programmatically create a Configuration as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestServlet.java here], or you can define a template using mapreduce.xml as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/war/WEB-INF/mapreduce.xml here]. There is a description of the mapreduce.xml format in the [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/ConfigurationTemplatePreprocessor.java javadoc for the ConfigurationTemplatePreprocessor class].
 
+==Defining the Descending Key Index===
+
+At present, in order to split the datastore keys between mapper shards, you'll need to add the following index definition for each entity you plan on mapping over:
+
+{{{
+<datastore-index kind="YourEntity" ancestor="false" source="manual">
+  <property name="__key__" direction="desc"/>
+</datastore-index>
+}}}
+
+We're working on removing this limitation.
+
 ==Running the Mapper==
 
 If you configured your mapper using the configuration template approach, then you can start the mapper by navigating your browser to `http://<your_app_id>.appspot.com/mapreduce/status`. Click the launch button to start one of the registered mapreduces, and then go to the mapreduce detail page to observe its status and control its execution.

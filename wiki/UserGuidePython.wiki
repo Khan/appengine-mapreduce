@@ -75,6 +75,7 @@ It requires entity_kind class to be defined.
 
 || *Parameter* || *Default value* || *Explanation* ||
 || entity_kind || None || The datastore kind to map over. ||
+|| namespaces || the current namespace || The list of namespaces that will be searched for entity_kinds. ||
 || batch_size || 50 || The number of entities to read from the datastore with each batch get. ||
 
 
@@ -85,6 +86,7 @@ It doesn't require entity_kind class to be defined.
 
 || *Parameter* || *Default value* || *Explanation* ||
 || entity_kind || None || The datastore kind to map over. ||
+|| namespaces || the current namespace || The list of namespaces that will be searched for entity_kinds. ||
 || batch_size || 50 || The number of entities to read from the datastore with each batch get. ||
 
 

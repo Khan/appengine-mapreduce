@@ -1,0 +1,21 @@
+#summary Description of how we do sharding based on the scatter reserved property
+
+Note: This is entirely implementation information for people interested in hacking on the mapper project itself. If you're just looking to use it as a client, there's no need to peruse this document.
+
+Until recently, finding split points for sharding the datastore input format was a hard problem. Essentially, the problem is that it's challenging to find the median key in a set of keys stored in the Datastore. This is because, unlike SQL, index scans require a large amount of resources and there's no reliable body of statistical information to optimize a search for the median, even if we're willing to tolerate error from the precise median.
+
+Our initial approach was to attempt to split key ranges lexicographically. The major problem with this approach was that this is a bad fit for many kinds. For instance, suppose a kind had a couple of keys with numerical IDs (say, left over from early testing) and a much greater body of keys with string names. Due to the great difference between integers and letter lexicographically, it was almost assured that the numerical keys would be allocated half of the shards.
+
+In order to prevent this, we've implemented a statistical sampling mechanism in the datastore that can be used to find roughly even split points. 
+
+= Datastore Implementation =
+
+*Please note that the scatter property itself is subject to change, and is currently only intended for use by the mapper library. If you're considering using it in another context, please email frew@google.com and chat.*
+
+We started by adding a `__scatter__` reserved property to some entities at put() time. Behind the scenes, for a random entity key the `__scatter__` property has a 0.8% of being populated when the entity is first stored (note: we don't charge users for the storage of this property). This chance is determined deterministically from the key, so if the entity receives a `__scatter__` property, then it will continue to do so for as long as it exists since the key is immutable. So selecting only the keys which have `__scatter__` should give us a uniformly distributed random sample of all keys that exist.
+
+The value of the `__scatter__` property when populated is a small hash of the key. We do not allow retrieving this value directly (it's stripped from the entity before it's returned to the application by the Datastore), but we do allow sorting on it. Since the hash is intended to uniformly permute the bytes, ordering by `__scatter__` and selecting the first n keys gives us the ability to pick a set of n keys that are roughly uniformly distributed throughout the space of existent keys.
+
+= Mapper Implementation =
+
+If the user requests k shards, then the mapper implementation will ask for some multiple m of k entities with the `__scatter__` property. It then sorts the results by key, and picks one key out of every m. The purpose of oversampling by m is to attempt to draw on the law of large numbers to ensure our split points are equally distributed (since the median of m points should have less variance than a single point). We then use the chosen keys for the split points, and everything is happy.

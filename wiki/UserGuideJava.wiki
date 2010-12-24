@@ -9,6 +9,8 @@ You can set the following in your configuration to customize mapper behavior:
 || mapreduce.mapper.shardcount || 8 || The number of concurrent workers to use. This also determines the number of shards to split the input into. ||
 || mapreduce.appengine.donecallback.url || None || A url in the format accepted by the task queue constructor to call after the mapper job is completed. The given url is sent a POST request with a paremeter of job_id, set to the completed MR's job ID. || 
 
+There are additional configuration options defined in the [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/AppEngineJobContext.java AppEngineJobContext] class.
+
 Additionally, each input format has its own configuration options:
 
 There is currently only one input format: [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/DatastoreInputFormat.java DatastoreInputFormat]. Its options are:

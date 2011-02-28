@@ -25,5 +25,3 @@ You can use the [http://code.google.com/p/appengine-mapreduce/source/browse/trun
 == Current Java Limitations ==
 The following limitations apply to the current implementation. We're working to remove all of them:
   * Only full range scan is supported, i.e. it's impossible to scan some entity subset.
-  * The entity to be mapped must have a descending index on __key__. There is support for guessing the key range in the Python implementation, and we plan to add that same strategy to the Java implementation.
-  * Sharding is currently done by splitting the space of keys lexicographically. For instance, suppose you have the keys 'a', 'ab', 'ac', and 'e' and you request two splits. The framework will find that the first key is 'a' and the last key is 'e'. 'a' is the first letter and 'e' is the fifth, so the middle is 'c'. Therefore, the two splits are ['a'...'c') and ['c'...), with the first split containing 'a', 'ab', and 'ac', and the last split only containing 'e'.

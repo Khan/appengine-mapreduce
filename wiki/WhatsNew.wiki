@@ -3,6 +3,12 @@
 == Recent Python Library Changes ==
 
 Some notable changes in python library:
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=159 r159] integrates mapper library with Files API.
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=136 r136] uses scatter index to split shards. This should generate more equal shards and works much faster.
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=131 r131] enables starting mapper jobs as part of transaction.
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=129 r129] introduces NamespaceInputReader which iterates over available namespaces.
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=111 r111] supports iterating over datasets with namespaces.
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=101 r101] adds additional kick-off stage to mapper startup process. This reduces the time to launch the job.
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=76 r76] makes job starting process more bulletproof by splitting it into two phases, and moving seconds phase to taskqueue
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=74 r74] adds support for key-only input reader
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=73 r73] adds support for BlobstoreZipLineInputReader

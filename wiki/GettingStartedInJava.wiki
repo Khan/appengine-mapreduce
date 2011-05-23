@@ -3,7 +3,7 @@
 
 == Adding the !MapReduce Library To Your Application ==
 
-Checkout the mapreduce folder to a separate directory:
+Check out the mapreduce folder to a separate directory:
 
 {{{
 svn checkout http://appengine-mapreduce.googlecode.com/svn/trunk/java
@@ -28,6 +28,19 @@ Add the mapreduce handler to your web.xml:
   <servlet-name>mapreduce</servlet-name>
   <url-pattern>/mapreduce/*</url-pattern>
 </servlet-mapping>
+}}}
+
+You may also want to add a security constraint to make sure that only application administrators can view/run mappers:
+
+{{{
+<security-constraint>
+  <web-resource-collection>
+    <url-pattern>/mapreduce/*</url-pattern>
+  </web-resource-collection>
+  <auth-constraint>
+    <role-name>admin</role-name>
+  </auth-constraint>
+</security-constraint>
 }}}
 
 == Defining a Mapper ==

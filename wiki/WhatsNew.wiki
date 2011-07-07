@@ -2,7 +2,8 @@
 
 == Recent Python Library Changes ==
 
-Some notable changes in python library:
+Some notable changes in the Python library:
+  * [http://code.google.com/p/appengine-mapreduce/source/detail?r=184 r184] touches up the mapreduce sample application, so you should find it to be much easier to use now.
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=159 r159] integrates mapper library with Files API.
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=136 r136] uses scatter index to split shards. This should generate more equal shards and works much faster.
   * [http://code.google.com/p/appengine-mapreduce/source/detail?r=131 r131] enables starting mapper jobs as part of transaction.

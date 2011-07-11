@@ -172,4 +172,4 @@ Our final output is a set of key-value pairs - keys are phrases, while the assoc
 
 = Conclusion = 
 
-That concludes our examples on how to use the Python MapReduce API. As you've seen, the MapReduce API is designed to make MapReduce easy within App Engine - you write simple Python code and don't have to worry about how to make your code fault-tolerant or how to schedule your jobs. Hopefully this whets your appetite, so get coding and making some cool applications!
+That concludes our examples on how to use the Python !MapReduce API. As you've seen, the !MapReduce API is designed to make !MapReduce easy within App Engine - you write simple Python code and don't have to worry about how to make your code fault-tolerant or how to schedule your jobs. Hopefully this whets your appetite, so get coding and making some cool applications!

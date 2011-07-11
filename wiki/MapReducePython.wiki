@@ -1,13 +1,13 @@
 #summary How to run MapReduce jobs in Python over App Engine.
 #labels Phase-Deploy,Featured
 
-= Overview =
+== Overview ==
 
 The !MapReduce API aims to make it easy to write !MapReduce jobs in your Google App Engine applications. In this article, we examine how to write three different !MapReduce jobs that use the Python version of App Engine. We follow the source code found in the demo application - see the Source tab and look under python/demo/main.py
 
 This article also assumes you have some familiarity with !MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers !MapReduce in general as well as the !MapReduce API for Python and Java.
 
-= The Demo App =
+== The Demo App ==
 
 The sample application included with the !MapReduce API allows users to upload a zip file containing one or more text files (hereafter referred to as the input corpus) and perform specific types of data analysis on that data. Specifically, three types of analysis jobs (implemented as !MapReduce jobs) can be run over the data:
   * Word Count: For each word in the input corpus, determine how often each word appears.
@@ -60,7 +60,7 @@ This function call constructs a Pipeline via the [http://code.google.com/p/appen
 
 The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by the !MapReduce API. Therefore, we continue by discussing the Mappers and Reducers needed for each of the three jobs that the demo application utilizes.
 
-= Word Count =
+== Word Count ==
 
 Let's begin by looking at how we invoke the !MapReduce job for our Word Count example:
 
@@ -110,7 +110,7 @@ This code is even simpler - here, we get all the values for a specific key. We d
 
 Our final output is a set of key-value pairs - keys are words from the input corpus, and values are the counts associated with their respective word.
 
-= Index =
+== Index ==
 
 The way we start the !MapReduce job is pretty much the same as in the previous example, so let's look at what's changed:
 
@@ -142,7 +142,7 @@ This Reduce function is pretty straightforward - we are given a word and the lis
 
 Our final output is a set of key-value pairs - keys are words from the input corpus, and values are a list of the files that the associated word was found in.
 
-= Phrases =
+== Phrases ==
 
 Like before, the way we start this !MapReduce job not too interesting - let's see what's changed:
 
@@ -192,6 +192,6 @@ The Reduce function receives a phrase along with a list of the files that we've 
 
 Our final output is a set of key-value pairs - keys are phrases, while the associated value is the filename that the phrase was found in.
 
-= Conclusion = 
+== Conclusion ==
 
 That concludes our examples on how to use the Python !MapReduce API. As you've seen, the !MapReduce API is designed to make !MapReduce easy within App Engine - you write simple Python code and don't have to worry about how to make your code fault-tolerant or how to schedule your jobs. Hopefully this whets your appetite, so get coding and making some cool applications!

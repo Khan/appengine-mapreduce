@@ -53,10 +53,10 @@ MapreducePipeline.run(
 
 This function call constructs a Pipeline via the [http://code.google.com/p/appengine-pipeline/ Pipeline API] with the following structure:
 
-1) Call the user-supplied Map function
-2) Perform a Shuffle based on the output of the Map function
-3) Call the user-supplied Reduce function
-4) Clean up temporary files emitted by Map, Shuffle, and Reduce
+  # Call the user-supplied Map function
+  # Perform a Shuffle based on the output of the Map function
+  # Call the user-supplied Reduce function
+  # Clean up temporary files emitted by Map, Shuffle, and Reduce
 
 The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by the !MapReduce API. Therefore, we continue by discussing the Mappers and Reducers needed for each of the three jobs that the demo application utilizes.
 

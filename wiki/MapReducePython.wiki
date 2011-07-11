@@ -65,19 +65,19 @@ The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by 
 Let's begin by looking at how we invoke the !MapReduce job for our Word Count example:
 
 {{{
-    yield mapreduce_pipeline.MapreducePipeline(
-        "word_count",
-        "main.word_count_map",
-        "main.word_count_reduce",
-        "mapreduce.input_readers.BlobstoreZipInputReader",
-        "mapreduce.output_writers.BlobstoreOutputWriter",
-        mapper_params={
-            "blob_key": blobkey,
-        },
-        reducer_params={
-            "mime_type": "text/plain",
-        },
-        shards=16)
+yield mapreduce_pipeline.MapreducePipeline(
+    "word_count",
+    "main.word_count_map",
+    "main.word_count_reduce",
+    "mapreduce.input_readers.BlobstoreZipInputReader",
+    "mapreduce.output_writers.BlobstoreOutputWriter",
+    mapper_params={
+        "blob_key": blobkey,
+    },
+    reducer_params={
+        "mime_type": "text/plain",
+    },
+    shards=16)
 }}}
 
 Here, we indicate that the name of our job is "word_count" along with the names of the functions that will perform the Map and Reduce functions (`word_count_map` and `word_count_reduce`, respectively). As our input is a zip file stored in the Blobstore, we use the `BlobstoreZipInputReader`, and as we are writing plaintext back to the Blobstore, we use the `BlobstoreOutputWriter`. Finally, we tell our Map function the location in the Blobstore where it can find the input file (the blob key), and we tell our reducer what the format for the final output of the job will be (plaintext).

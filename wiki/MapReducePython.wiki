@@ -1,0 +1,102 @@
+#summary How to run MapReduce jobs in Python over App Engine.
+#labels Phase-Deploy
+
+= Overview =
+
+The MapReduce API aims to make it easy to write MapReduce jobs in your Google App Engine applications. In this article, we examine how to write three different MapReduce jobs that use the Python version of App Engine. We follow the source code found in the demo application - see the Source tab and look under python/demo/main.py
+
+This article also assumes you have some familiarity with MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers MapReduce in general as well as the MapReduce API for Python and Java.
+
+= The Demo App =
+
+The sample application included with the MapReduce API allows users to upload a zip file containing one or more text files (hereafter referred to as the input corpus) and perform specific types of data analysis on that data. Specifically, three types of analysis jobs (implemented as MapReduce jobs) can be run over the data:
+  * WordCount: For each word in the input corpus, determine how often each word appears.
+  * Index: For each word in the input corpus, determine which files it appears in.
+  * Phrases: Determine the "improbable words" in each input file - that is, phrases that appear in this input file but not in the others.
+
+Users wishing to simply run these MapReduce jobs should take the demo code and deploy it. Users wishing to know more about how these jobs are constructed should read on. At a high level, all MapReduce jobs in the Python API are called as follows:
+
+MapreducePipeline.run(
+          job_name,
+          mapper_spec,
+          reducer_spec,
+          input_reader_spec,
+          output_writer_spec=None,
+          mapper_params=None,
+          reducer_params=None,
+          shards=None
+)
+
+This function call constructs a Pipeline via the [http://code.google.com/p/appengine-pipeline/ Pipeline API] with the following structure:
+
+1) Call the user-supplied Map function
+2) Perform a Shuffle based on the output of the Map function
+3) Call the user-supplied Reduce function
+4) Clean up temporary files emitted by Map, Shuffle, and Reduce
+
+The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by the MapReduce API. Therefore, we continue by discussing the Mappers and Reducers needed for each of the three jobs that the demo application utilizes.
+
+= WordCount =
+
+Let's begin by looking at how we invoke the MapReduce job for our WordCount example:
+
+{{{
+    yield mapreduce_pipeline.MapreducePipeline(
+        "word_count",
+        "main.word_count_map",
+        "main.word_count_reduce",
+        "mapreduce.input_readers.BlobstoreZipInputReader",
+        "mapreduce.output_writers.BlobstoreOutputWriter",
+        mapper_params={
+            "blob_key": blobkey,
+        },
+        reducer_params={
+            "mime_type": "text/plain",
+        },
+        shards=16)
+}}}
+
+Here, we indicate that the name of our job is "word_count" along with the names of the functions that will perform the Map and Reduce functions (`word_count_map` and `word_count_reduce`, respectively). As our input is a zip file stored in the Blobstore, we use the `BlobstoreZipInputReader`, and as we are writing plaintext back to the Blobstore, we use the `BlobstoreOutputWriter`. Finally, we tell our Map function the location in the Blobstore where it can find the input file (the blob key), and we tell our reducer what the format for the final output of the job will be (plaintext).
+
+*Map function*: Our mapper consists of the following code:
+
+{{{
+def word_count_map(data):
+  """Word count map function."""
+  (entry, text_fn) = data
+  text = text_fn()
+
+  logging.debug("Got %s", entry.filename)
+  for s in split_into_sentences(text):
+    for w in split_into_words(s.lower()):
+      yield (w, "")
+}}}
+
+As we can see, our Map function splits each line of input it receives (note that unzipping the file is already done for us by the input function we provided), and for each word it finds, it emits (word, ""). The value has no special meaning here - our Reduce function will not use it.
+
+*Reduce function*: Our reducer consists of the following code:
+
+{{{
+def word_count_reduce(key, values):
+  """Word count reduce function."""
+  yield "%s: %d\n" % (key, len(values))
+}}}
+
+This code is even simpler - here, we get all the values for a specific key. We don't care about what the values are - we only care about how many of them there are, as this tells us how many times we saw a particular word. We perform this count and emit (word, count for word).
+
+Our final output is a set of key-value pairs - keys are words from the input corpus, and values are the counts associated with their respective word.
+
+= Index =
+
+to come soon!
+
+= Phrases =
+
+to come soon!
+
+= Details =
+
+Add your content here.  Format your content with:
+  * Text in *bold* or _italic_
+  * Headings, paragraphs, and lists
+  * Automatic links to other wiki pages

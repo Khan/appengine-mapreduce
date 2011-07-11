@@ -40,7 +40,7 @@ The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by 
 
 = Word Count =
 
-Let's begin by looking at how we invoke the !MapReduce job for our WordCount example:
+Let's begin by looking at how we invoke the !MapReduce job for our Word Count example:
 
 {{{
     yield mapreduce_pipeline.MapreducePipeline(

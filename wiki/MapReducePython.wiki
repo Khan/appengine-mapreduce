@@ -3,9 +3,9 @@
 
 = Overview =
 
-The !MapReduce API aims to make it easy to write !MapReduce jobs in your Google App Engine applications. In this article, we examine how to write three different MapReduce jobs that use the Python version of App Engine. We follow the source code found in the demo application - see the Source tab and look under python/demo/main.py
+The !MapReduce API aims to make it easy to write !MapReduce jobs in your Google App Engine applications. In this article, we examine how to write three different !MapReduce jobs that use the Python version of App Engine. We follow the source code found in the demo application - see the Source tab and look under python/demo/main.py
 
-This article also assumes you have some familiarity with !MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers !MapReduce in general as well as the MapReduce API for Python and Java.
+This article also assumes you have some familiarity with !MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers !MapReduce in general as well as the !MapReduce API for Python and Java.
 
 = The Demo App =
 

@@ -14,7 +14,29 @@ The sample application included with the !MapReduce API allows users to upload a
   * Index: For each word in the input corpus, determine which files it appears in.
   * Phrases: Determine the "improbable words" in each input file - that is, phrases that appear in this input file but not in the others.
 
-Users wishing to simply run these !MapReduce jobs should take the demo code and deploy it. Users wishing to know more about how these jobs are constructed should read on. At a high level, all !MapReduce jobs in the Python API are called as follows:
+Users wishing to simply run these !MapReduce jobs should take the demo code and deploy it. Users wishing to know more about how these jobs are constructed should read on. 
+
+At a high level, all !MapReduce jobs in the Python API require you to add this route to your `app.yaml`:
+
+{{{
+- url: /mapreduce(/.*)?
+  script: mapreduce/main.py
+}}}
+
+We also import a few files that provide our !MapReduce support:
+
+{{{
+from mapreduce.lib import files
+from google.appengine.api import taskqueue
+from google.appengine.api import users
+
+from mapreduce import base_handler
+from mapreduce import mapreduce_pipeline
+from mapreduce import operation as op
+from mapreduce import shuffler
+}}}
+
+Of course, be sure that you've downloaded the !MapReduce API and placed it in your project's top-level directory (otherwise Python won't know where these files are!). Finally, you can run a !MapReduce job:
 
 {{{
 MapreducePipeline.run(

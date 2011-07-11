@@ -1,20 +1,20 @@
-#summary How to run MapReduce jobs in Python over App Engine.
+#summary How to run !MapReduce jobs in Python over App Engine.
 #labels Phase-Deploy
 
 = Overview =
 
-The MapReduce API aims to make it easy to write MapReduce jobs in your Google App Engine applications. In this article, we examine how to write three different MapReduce jobs that use the Python version of App Engine. We follow the source code found in the demo application - see the Source tab and look under python/demo/main.py
+The !MapReduce API aims to make it easy to write !MapReduce jobs in your Google App Engine applications. In this article, we examine how to write three different MapReduce jobs that use the Python version of App Engine. We follow the source code found in the demo application - see the Source tab and look under python/demo/main.py
 
-This article also assumes you have some familiarity with MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers MapReduce in general as well as the MapReduce API for Python and Java.
+This article also assumes you have some familiarity with !MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers !MapReduce in general as well as the MapReduce API for Python and Java.
 
 = The Demo App =
 
-The sample application included with the MapReduce API allows users to upload a zip file containing one or more text files (hereafter referred to as the input corpus) and perform specific types of data analysis on that data. Specifically, three types of analysis jobs (implemented as MapReduce jobs) can be run over the data:
+The sample application included with the !MapReduce API allows users to upload a zip file containing one or more text files (hereafter referred to as the input corpus) and perform specific types of data analysis on that data. Specifically, three types of analysis jobs (implemented as !MapReduce jobs) can be run over the data:
   * WordCount: For each word in the input corpus, determine how often each word appears.
   * Index: For each word in the input corpus, determine which files it appears in.
   * Phrases: Determine the "improbable words" in each input file - that is, phrases that appear in this input file but not in the others.
 
-Users wishing to simply run these MapReduce jobs should take the demo code and deploy it. Users wishing to know more about how these jobs are constructed should read on. At a high level, all MapReduce jobs in the Python API are called as follows:
+Users wishing to simply run these !MapReduce jobs should take the demo code and deploy it. Users wishing to know more about how these jobs are constructed should read on. At a high level, all !MapReduce jobs in the Python API are called as follows:
 
 MapreducePipeline.run(
           job_name,
@@ -34,11 +34,11 @@ This function call constructs a Pipeline via the [http://code.google.com/p/appen
 3) Call the user-supplied Reduce function
 4) Clean up temporary files emitted by Map, Shuffle, and Reduce
 
-The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by the MapReduce API. Therefore, we continue by discussing the Mappers and Reducers needed for each of the three jobs that the demo application utilizes.
+The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by the !MapReduce API. Therefore, we continue by discussing the Mappers and Reducers needed for each of the three jobs that the demo application utilizes.
 
 = WordCount =
 
-Let's begin by looking at how we invoke the MapReduce job for our WordCount example:
+Let's begin by looking at how we invoke the !MapReduce job for our WordCount example:
 
 {{{
     yield mapreduce_pipeline.MapreducePipeline(

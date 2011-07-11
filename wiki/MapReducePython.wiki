@@ -38,7 +38,7 @@ This function call constructs a Pipeline via the [http://code.google.com/p/appen
 
 The Shuffle and Cleanup functions (Steps 2 and 4) are automatically provided by the !MapReduce API. Therefore, we continue by discussing the Mappers and Reducers needed for each of the three jobs that the demo application utilizes.
 
-= WordCount =
+= Word Count =
 
 Let's begin by looking at how we invoke the !MapReduce job for our WordCount example:
 

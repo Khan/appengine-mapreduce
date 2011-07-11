@@ -1,5 +1,5 @@
-#summary How to run !MapReduce jobs in Python over App Engine.
-#labels Phase-Deploy
+#summary How to run MapReduce jobs in Python over App Engine.
+#labels Phase-Deploy,Featured
 
 = Overview =
 
@@ -90,8 +90,86 @@ Our final output is a set of key-value pairs - keys are words from the input cor
 
 = Index =
 
-to come soon!
+The way we start the !MapReduce job is pretty much the same as in the previous example, so let's look at what's changed:
+
+*Map function*: Our mapper consists of the following code:
+
+{{{
+def index_map(data):
+  """Index demo map function."""
+  (entry, text_fn) = data
+  text = text_fn()
+
+  logging.debug("Got %s", entry.filename)
+  for s in split_into_sentences(text):
+    for w in split_into_words(s.lower()):
+      yield (w, entry.filename)
+}}}
+
+Here our Map function breaks each input sentence into words like before. What's different is that here, we emit the word and the filename we found it in (instead of just "").
+
+*Reduce function*: Our reducer consists of the following code:
+
+{{{
+def index_reduce(key, values):
+  """Index demo reduce function."""
+  yield "%s: %s\n" % (key, list(set(values)))
+}}}
+
+This Reduce function is pretty straightforward - we are given a word and the list of files it is found in, which is exactly what we wanted to find out! We just convert the values into an array (list) and return the result.
+
+Our final output is a set of key-value pairs - keys are words from the input corpus, and values are a list of the files that the associated word was found in.
 
 = Phrases =
 
-to come soon!
+Like before, the way we start this !MapReduce job not too interesting - let's see what's changed:
+
+*Map function*: Our mapper consists of the following code:
+
+{{{
+PHRASE_LENGTH = 4
+
+
+def phrases_map(data):
+  """Phrases demo map function."""
+  (entry, text_fn) = data
+  text = text_fn()
+  filename = entry.filename
+
+  logging.debug("Got %s", filename)
+  for s in split_into_sentences(text):
+    words = split_into_words(s.lower())
+    if len(words) < PHRASE_LENGTH:
+      yield (":".join(words), filename)
+      continue
+    for i in range(0, len(words) - PHRASE_LENGTH):
+      yield (":".join(words[i:i+PHRASE_LENGTH]), filename)
+}}}
+
+Here we've indicated that a phrase is no more than four words in length - in practice, if this value is set too high, all phrases are deemed improbable, and if it's too low, very few things are deemed improbable (4 is a nice sweet spot). Our Map function splits each sentence into chunks of words (phrases). It always emits the whole input line if it has less than four words in it, and after that, emits every phrase in the sentence. What that means is every four words next to each other will be emitted (e.g., "A B C D E" emits two phrases, "A B C D" and "B C D E"). We thus emit each phrase as the key and the filename that it was found in as the value.
+
+*Reduce function*: Our reducer consists of the following code:
+
+{{{
+def phrases_reduce(key, values):
+  """Phrases demo reduce function."""
+  if len(values) < 10:
+    return
+  counts = {}
+  for filename in values:
+    counts[filename] = counts.get(filename, 0) + 1
+
+  words = re.sub(r":", " ", key)
+  threshold = len(values) / 2
+  for filename, count in counts.items():
+    if count > threshold:
+      yield "%s:%s\n" % (words, filename)
+}}}
+
+The Reduce function receives a phrase along with a list of the files that we've seen the phrase in. It first ensures that enough input data has been received for each key - if it hasn't been used 10 times or more, then this phrase isn't something that we think is a likely phrase that the author uses. We then count how many times this file appears in all files, and if a majority of its occurrences are in a single file, we say that this phrase is an improbable phrase. By this, we mean that it shows up very often in this file compared to all other files and has shown up a large enough number of times that is unlikely to have been accidental. 
+
+Our final output is a set of key-value pairs - keys are phrases, while the associated value is the filename that the phrase was found in.
+
+= Conclusion = 
+
+That concludes our examples on how to use the Python MapReduce API. As you've seen, the MapReduce API is designed to make MapReduce easy within App Engine - you write simple Python code and don't have to worry about how to make your code fault-tolerant or how to schedule your jobs. Hopefully this whets your appetite, so get coding and making some cool applications!

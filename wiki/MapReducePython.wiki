@@ -14,7 +14,7 @@ The sample application included with the !MapReduce API allows users to upload a
   * Index: For each word in the input corpus, determine which files it appears in.
   * Phrases: Determine the "improbable words" in each input file - that is, phrases that appear in this input file but not in the others.
 
-All of our examples specify Map and Reduce functions, and start a MapReduce job via the following API call:
+All of our examples specify Map and Reduce functions, and start a !MapReduce job via the following API call:
 
 {{{
 MapreducePipeline.run(

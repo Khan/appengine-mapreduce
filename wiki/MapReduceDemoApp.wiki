@@ -7,6 +7,8 @@ The !MapReduce API aims to make it easy to write !MapReduce jobs in your Google 
 
 This article also assumes you have some familiarity with !MapReduce. If you do not, you may want to [http://labs.google.com/papers/mapreduce.html read up on it] or [http://www.youtube.com/watch?v=EIxelKcyCC0 watch Mike Aizatsky's video] from Google I/O 2011, which covers !MapReduce in general as well as the !MapReduce API for Python and Java.
 
+Follow along with us at home - the source for the !MapReduce demo can be found [http://code.google.com/p/appengine-mapreduce/source/browse/#svn%2Ftrunk%2Fpython%2Fdemo here].
+
 == The Demo App ==
 
 The sample application included with the !MapReduce API allows users to upload a zip file containing one or more text files (hereafter referred to as the input corpus) and perform specific types of data analysis on that data. Specifically, three types of analysis jobs (implemented as !MapReduce jobs) can be run over the data:

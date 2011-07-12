@@ -1,5 +1,5 @@
 #summary How to run MapReduce jobs in Python over App Engine.
-#labels Phase-Deploy,Featured
+#labels Deprecated
 
 == Overview ==
 

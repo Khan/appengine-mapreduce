@@ -168,7 +168,7 @@ def phrases_reduce(key, values):
       yield "%s:%s\n" % (words, filename)
 }}}
 
-The Reduce function receives a phrase along with a list of the files that we've seen the phrase in. It first ensures that enough input data has been received for each key - if it hasn't been used 10 times or more, then this phrase isn't something that we think is a likely phrase that the author uses. We then count how many times this file appears in all files, and if a majority of its occurrences are in a single file, we say that this phrase is an improbable phrase. By this, we mean that it shows up very often in this file compared to all other files and has shown up a large enough number of times that is unlikely to have been accidental. 
+The Reduce function receives a phrase along with a list of the files that we've seen the phrase in. It first ensures that enough input data has been received for each key - if it hasn't been used 10 times or more, then this phrase isn't something that we think is a likely phrase that the author uses. We then count how many times this phrase appears in all files, and if a majority of its occurrences are in a single file, we say that this phrase is an improbable phrase. By this, we mean that it shows up very often in this file compared to all other files and has shown up a large enough number of times that is unlikely to have been accidental. 
 
 Our final output is a set of key-value pairs - keys are phrases, while the associated value is the filename that the phrase was found in.
 

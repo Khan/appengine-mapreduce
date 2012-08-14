@@ -3,34 +3,47 @@
 
 == Adding the !MapReduce Library To Your Application ==
 
-Check out the mapreduce folder to a separate directory:
+Check out the !MapReduce code to a separate directory:
 
 {{{
 svn checkout http://appengine-mapreduce.googlecode.com/svn/trunk/java
 }}}
 
-Build the appropriate jar using ant in the directory you just checked out:
+Build the appropriate jar using `ant` in the directory you just checked out:
 
 {{{
 ant
 }}}
 
-Copy the resulting jars in the dist/lib directory into your application's WEB-INF/lib directory. If you're already using any of the dependency jars, there's no need to have duplicates.
+Copy the resulting jars in the `dist/lib` directory into your application's `WEB-INF/lib` directory. If you're already using any of the dependency jars, there's no need to have duplicates.
 
-Add the mapreduce handler to your web.xml:
+Add the !MapReduce and Pipeline handlers to your `web.xml`:
 
 {{{
-<servlet>
-  <servlet-name>mapreduce</servlet-name>
-  <servlet-class>com.google.appengine.tools.mapreduce.MapReduceServlet</servlet-class>
-</servlet>
-<servlet-mapping>
-  <servlet-name>mapreduce</servlet-name>
-  <url-pattern>/mapreduce/*</url-pattern>
-</servlet-mapping>
+  <servlet>
+    <servlet-name>mapreduce</servlet-name>
+    <servlet-class>
+      com.google.appengine.tools.mapreduce.MapReduceServlet
+    </servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>mapreduce</servlet-name>
+    <url-pattern>/mapreduce/*</url-pattern>
+  </servlet-mapping>
+
+  <servlet>
+    <servlet-name>pipeline</servlet-name>
+    <servlet-class>
+      com.google.appengine.tools.pipeline.impl.servlets.PipelineServlet
+    </servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>pipeline</servlet-name>
+    <url-pattern>/_ah/pipeline/*</url-pattern>
+  </servlet-mapping>
 }}}
 
-You may also want to add a security constraint to make sure that only application administrators can view/run mappers:
+You should also add a security constraint:
 
 {{{
 <security-constraint>
@@ -43,17 +56,27 @@ You may also want to add a security constraint to make sure that only applicatio
 </security-constraint>
 }}}
 
-== Defining a Mapper ==
+== Defining Mapper and Reducer ==
 
-Create a class implementing !AppEngineMapper. You can see an example of such a class [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestMapper.java here].
+Create a class implementing `Mapper`. You can see an example of such a class [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/entitycount/CountMapper.java here].
 
-There are two ways to configure a mapper. You can either programmatically create a Configuration as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/TestServlet.java here], or you can define a template using mapreduce.xml as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/war/WEB-INF/mapreduce.xml here]. There is a description of the mapreduce.xml format in the [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/src/com/google/appengine/tools/mapreduce/ConfigurationTemplatePreprocessor.java javadoc for the ConfigurationTemplatePreprocessor class].
+Similarly, create a class implementing `Reducer`, as seen [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/entitycount/CountReducer.java here].
 
-==Running the Mapper==
 
-If you configured your mapper using the configuration template approach, then you can start the mapper by navigating your browser to `http://<your_app_id>.appspot.com/mapreduce/status`. Click the launch button to start one of the registered mapreduces, and then go to the mapreduce detail page to observe its status and control its execution.
+== Running the !MapReduce ==
 
-If you used the programmatic approach, then just run whichever handler you added the creation code to. The mapper will show up on the status page (linked above) just as if you had run it using a template.
+Use `MapReduceJob.start()` as seen in the `start*Job()` methods [http://code.google.com/p/appengine-mapreduce/source/browse/trunk/java/example/com/google/appengine/demos/mapreduce/entitycount/Servlet.java here].
 
-==Further Reading==
-You can get more information about optional parameters, batch datastore mutations, and more at the [UserGuideJava Java User Guide]
+
+== Viewing the Status of your !MapReduce ==
+
+`MapReduceJob.start()` returns a pipeline id.  The page `/_ah/pipeline/status.html?root=`_`<`PIPELINE_ID>_ on your application will display the status of this pipeline.
+
+
+== Limitations ==
+
+The code is a work in progress, and this is an early release.  If you run into problems, please don't hesitate to ask questions on the [https://groups.google.com/forum/?fromgroups#!forum/app-engine-pipeline-api mailing list] or to report [http://code.google.com/p/appengine-mapreduce/issues/list bugs].
+
+The current shuffle implementation is limited to datasets that fit entirely in memory on a single instance.
+
+The current code does not offer an overview page that displays all running jobs, but you can find the pipeline job IDs in your application's logs and in the task queue, and view the status as described above.

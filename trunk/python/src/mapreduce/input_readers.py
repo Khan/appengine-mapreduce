@@ -535,6 +535,9 @@ class AbstractDatastoreInputReader(InputReader):
           raise BadReaderParamsError("Filter should be a 3-tuple: %s", f)
         if not isinstance(f[0], basestring):
           raise BadReaderParamsError("First element should be string: %s", f)
+        if f[1] != "=":
+          raise BadReaderParamsError(
+              "Only equality filters are supported: %s", f)
 
   @classmethod
   def split_input(cls, mapper_spec):

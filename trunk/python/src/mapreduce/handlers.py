@@ -803,6 +803,9 @@ class MapperWorkerCallbackHandler(base_handler.HugeTaskHandler):
                         worker_task.name,
                         e.__class__,
                         e)
+    else:
+      logging.warning(
+          "Not re-scheduling worker task due to task hook returning False.")
 
   def _processing_limit(self, spec):
     """Get the limit on the number of map calls allowed by this slice.
@@ -1143,6 +1146,10 @@ class ControllerCallbackHandler(base_handler.HugeTaskHandler):
               taskqueue.TaskAlreadyExistsError), e:
         logging.warning("Task %r with params %r already exists. %s: %s",
                         task_name, task_params, e.__class__, e)
+    else:
+      logging.warning(
+          ("Not re-scheduling task due to task hook returning False. " +
+           "Serial-id [%s]") % serial_id)
 
 
 class KickOffJobHandler(base_handler.TaskQueueHandler):

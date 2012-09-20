@@ -17,6 +17,7 @@
 """Simple quota system backed by memcache storage."""
 
 
+import logging
 
 
 # Memcache namespace to use.
@@ -57,7 +58,7 @@ class QuotaManager(object):
     self.memcache_client.incr(bucket, delta=amount,
                               initial_value=_OFFSET, namespace=_QUOTA_NAMESPACE)
 
-  def consume(self, bucket, amount, consume_some=False):
+  def consume(self, bucket, amount, consume_some=False, verbose=False):
     """Consume amount from quota bucket.
 
     Args:
@@ -66,6 +67,7 @@ class QuotaManager(object):
       consume_some: specifies behavior in case of not enough quota. If False,
         the method will leave quota intact and return 0. If True, will try to
         consume as much as possible.
+      verbose: whether or not to print diagnostic messaging when quota is out
 
     Returns:
       Amount of quota consumed.
@@ -79,8 +81,17 @@ class QuotaManager(object):
     if consume_some and new_quota is not None and _OFFSET - new_quota < amount:
       # we still can consume some
       self.put(bucket, _OFFSET - new_quota)
-      return amount - (_OFFSET - new_quota)
+      result = amount - (_OFFSET - new_quota)
+      if verbose:
+        logging.info("Quota low - returning partial value [%s]" % result)
+      return result
     else:
+      if verbose:
+        if new_quota is None:
+          logging.error("Quota uninitialized or memcache value was ejected!")
+        elif _OFFSET - new_quota >= amount:
+          logging.error("Out of quota!")
+
       self.put(bucket, amount)
       return 0
 
@@ -132,11 +143,12 @@ class QuotaConsumer(object):
     self.bucket = bucket
     self.quota = 0
 
-  def consume(self, amount=1):
+  def consume(self, amount=1, verbose=True):
     """Consume quota.
 
     Args:
       amount: amount of quota to be consumed as int.
+      verbose: whether or not to print diagnostic messaging when quota is out
 
     Returns:
       True if quota was successfully consumed, False if there's not enough
@@ -144,8 +156,11 @@ class QuotaConsumer(object):
     """
     while self.quota < amount:
       delta = self.quota_manager.consume(self.bucket, self.batch_size,
-                                         consume_some=True)
+                                         consume_some=True,
+                                         verbose=verbose)
       if not delta:
+        if verbose:
+          logging.error("QuotaConsumer unable to acquire quota!")
         return False
       self.quota += delta
 

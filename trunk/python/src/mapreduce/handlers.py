@@ -170,7 +170,7 @@ class MapperWorkerCallbackHandler(util.HugeTaskHandler):
         try:
           # We shouldn't fetch an entity from the reader if there's not enough
           # quota to process it. Perform all quota checks proactively.
-          if not quota_consumer or quota_consumer.consume():
+          if not quota_consumer or quota_consumer.consume(verbose=True):
             for entity in input_reader:
               if isinstance(entity, db.Model):
                 shard_state.last_work_item = repr(entity.key())
@@ -182,7 +182,7 @@ class MapperWorkerCallbackHandler(util.HugeTaskHandler):
 
               # Check if we've got enough quota for the next entity.
               if (quota_consumer and not scan_aborted and
-                  not quota_consumer.consume()):
+                  not quota_consumer.consume(verbose=True)):
                 scan_aborted = True
               if scan_aborted:
                 break
@@ -374,7 +374,9 @@ class MapperWorkerCallbackHandler(util.HugeTaskHandler):
                         transient_shard_state.to_dict(),
                         e.__class__,
                         e)
-
+    else:
+      logging.warning(
+          "Not re-scheduling worker task due to task hook returning False.")
 
 class ControllerCallbackHandler(util.HugeTaskHandler):
   """Supervises mapreduce execution.
@@ -632,6 +634,10 @@ class ControllerCallbackHandler(util.HugeTaskHandler):
               taskqueue.TaskAlreadyExistsError), e:
         logging.warning("Task %r with params %r already exists. %s: %s",
                         task_name, task_params, e.__class__, e)
+    else:
+      logging.warning(
+          ("Not re-scheduling task due to task hook returning False. " +
+           "Serial-id [%s]") % serial_id)
 
 
 class KickOffJobHandler(util.HugeTaskHandler):

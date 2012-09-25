@@ -399,7 +399,7 @@ class AbstractDatastoreInputReader(InputReader):
   # TODO(user): use query splitting functionality when it becomes available
   # instead.
   @classmethod
-  def _split_input_from_namespace(cls, app, namespace, entity_kind,
+  def _split_input_from_namespace(cls, app, namespace, entity_kind, filters,
                                   shard_count):
     """Return KeyRange objects. Helper for _split_input_from_params.
 
@@ -419,7 +419,22 @@ class AbstractDatastoreInputReader(InputReader):
                                _app=app,
                                keys_only=True)
     ds_query.Order("__scatter__")
-    random_keys = ds_query.Get(shard_count * cls._OVERSAMPLING_FACTOR)
+    random_keys = None
+    if filters:
+      ds_query_with_filters = copy.copy(ds_query)
+      for (key, op, value) in filters:
+        ds_query_with_filters.update({'%s %s' % (key, op): value})
+        try:
+          random_keys = ds_query_with_filters.Get(shard_count *
+                                                  cls._OVERSAMPLING_FACTOR)
+        except db.NeedIndexError, why:
+          logging.warning('Need to add an index for optimal mapreduce-input'
+                          ' splitting:\n%s' % why)
+          # We'll try again without the filter.  We hope the filter
+          # will filter keys uniformly across the key-name space!
+
+    if not random_keys:
+      random_keys = ds_query.Get(shard_count * cls._OVERSAMPLING_FACTOR)
 
     if not random_keys:
       # There are no entities with scatter property. We have no idea
@@ -479,6 +494,7 @@ class AbstractDatastoreInputReader(InputReader):
           cls._split_input_from_namespace(app,
                                           namespace,
                                           entity_kind_name,
+                                          params.get(cls.FILTERS_PARAM),
                                           shard_count))
 
     # Divide the KeyRanges into shard_count shards. The KeyRanges for different
@@ -1538,9 +1554,10 @@ class ConsistentKeyReader(DatastoreKeyInputReader):
                                   app,
                                   namespace,
                                   entity_kind_name,
+                                  filters,
                                   shard_count):
     key_ranges = super(ConsistentKeyReader, cls)._split_input_from_namespace(
-        app, namespace, entity_kind_name, shard_count)
+        app, namespace, entity_kind_name, filters, shard_count)
     assert len(key_ranges) == shard_count
 
     # The KeyRanges calculated by the base class may not include keys for

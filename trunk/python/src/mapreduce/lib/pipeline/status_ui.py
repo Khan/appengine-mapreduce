@@ -19,6 +19,7 @@
 import logging
 import os
 import traceback
+import zipfile
 
 from google.appengine.api import users
 from google.appengine.ext import webapp
@@ -84,10 +85,19 @@ class _StatusUiHandler(webapp.RequestHandler):
 
     relative_path, content_type = self._RESOURCE_MAP[resource]
     path = os.path.join(os.path.dirname(__file__), relative_path)
+
+    # It's possible we're inside a zipfile (zipimport).  If so,
+    # __file__ will start with 'something.zip'.
+    (possible_zipfile, zip_path) = os.path.relpath(path).split(os.sep, 1)
+    try:
+      content = zipfile.ZipFile(possible_zipfile).read(zip_path)
+    except (IOError, OSError, zipfile.BadZipfile):
+      content = open(path, 'rb').read()
+
     if not pipeline._DEBUG:
       self.response.headers["Cache-Control"] = "public, max-age=300"
     self.response.headers["Content-Type"] = content_type
-    self.response.out.write(open(path, 'rb').read())
+    self.response.out.write(content)
 
 
 class _BaseRpcHandler(webapp.RequestHandler):

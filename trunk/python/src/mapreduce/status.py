@@ -20,6 +20,7 @@
 
 import os
 import time
+import zipfile
 
 from google.appengine.api import validation
 from google.appengine.api import yaml_builder
@@ -278,9 +279,18 @@ class ResourceHandler(base_handler.BaseHandler):
 
     real_path, content_type = self._RESOURCE_MAP[relative]
     path = os.path.join(os.path.dirname(__file__), "static", real_path)
+
+    # It's possible we're inside a zipfile (zipimport).  If so,
+    # __file__ will start with 'something.zip'.
+    (possible_zipfile, zip_path) = os.path.relpath(path).split(os.sep, 1)
+    try:
+      content = zipfile.ZipFile(possible_zipfile).read(zip_path)
+    except (IOError, OSError, zipfile.BadZipfile):
+      content = open(path, 'rb').read()
+
     self.response.headers["Cache-Control"] = "public; max-age=300"
     self.response.headers["Content-Type"] = content_type
-    self.response.out.write(open(path).read())
+    self.response.out.write(content)
 
 
 class ListConfigsHandler(base_handler.GetJsonHandler):

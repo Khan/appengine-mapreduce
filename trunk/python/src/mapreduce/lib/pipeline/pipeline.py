@@ -2748,10 +2748,25 @@ def _get_internal_status(pipeline_key=None,
     'backoffFactor': pipeline_record.params['backoff_factor'],
   }
 
-  # TODO(user): Truncate args, kwargs, and outputs to < 1MB each so we
+  # Truncate args, kwargs, and outputs to < 1MB each so we
   # can reasonably return the whole tree of pipelines and their outputs.
   # Coerce each value to a string to truncate if necessary. For now if the
   # params are too big it will just cause the whole status page to break.
+  def truncate_value(value):
+    return str(value)[:100]
+
+  def truncate_dict(the_dict):
+    new_dict = {}
+    for k, v in the_dict.iteritems():
+      if isinstance(v, dict):
+        new_dict.update([(k, truncate_dict(v))])
+      else:
+        new_dict.update([(k, truncate_value(v))])
+    return new_dict
+
+  output['args'] = [truncate_dict(v) for v in output['args']]
+  output['kwargs'] = truncate_dict(output['kwargs'])
+  output['outputs'] = truncate_dict(output['outputs'])
 
   # Fix the key names in parameters to match JavaScript style.
   for value_dict in itertools.chain(

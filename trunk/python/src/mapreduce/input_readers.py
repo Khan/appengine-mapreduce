@@ -545,10 +545,10 @@ class AbstractDatastoreInputReader(InputReader):
       if not isinstance(filters, list):
         raise BadReaderParamsError("Expected list for filters parameter")
       for f in filters:
-        if not isinstance(f, tuple):
-          raise BadReaderParamsError("Filter should be a tuple: %s", f)
+        if not isinstance(f, tuple) and not isinstance(f, list):
+          raise BadReaderParamsError("Filter should be a tuple or list: %s", f)
         if len(f) != 3:
-          raise BadReaderParamsError("Filter should be a 3-tuple: %s", f)
+          raise BadReaderParamsError("Filter should have 3 elements: %s", f)
         if not isinstance(f[0], basestring):
           raise BadReaderParamsError("First element should be string: %s", f)
         if f[1] != "=":

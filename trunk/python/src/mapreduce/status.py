@@ -16,11 +16,12 @@
 
 """Status page handler for mapreduce framework."""
 
-
+__author__ = ("aizatsky@google.com (Mike Aizatsky)",
+              "bslatkin@google.com (Brett Slatkin)")
 
 import os
+import pkgutil
 import time
-import zipfile
 
 from google.appengine.api import validation
 from google.appengine.api import yaml_builder
@@ -28,6 +29,7 @@ from google.appengine.api import yaml_errors
 from google.appengine.api import yaml_listener
 from google.appengine.api import yaml_object
 from google.appengine.ext import db
+from google.appengine.ext import webapp
 from mapreduce import base_handler
 from mapreduce import errors
 from mapreduce import model
@@ -259,7 +261,7 @@ def get_mapreduce_yaml(parse=parse_mapreduce_yaml):
     mr_yaml_file.close()
 
 
-class ResourceHandler(base_handler.BaseHandler):
+class ResourceHandler(webapp.RequestHandler):
   """Handler for static resources."""
 
   _RESOURCE_MAP = {
@@ -279,18 +281,13 @@ class ResourceHandler(base_handler.BaseHandler):
 
     real_path, content_type = self._RESOURCE_MAP[relative]
     path = os.path.join(os.path.dirname(__file__), "static", real_path)
-
-    # It's possible we're inside a zipfile (zipimport).  If so, path
-    # will include 'something.zip'.
-    if ('.zip' + os.sep) in path:
-      (zip_file, zip_path) = os.path.relpath(path).split('.zip' + os.sep, 1)
-      content = zipfile.ZipFile(zip_file + '.zip').read(zip_path)
-    else:
-      content = open(path, 'rb').read()
-
     self.response.headers["Cache-Control"] = "public; max-age=300"
     self.response.headers["Content-Type"] = content_type
-    self.response.out.write(content)
+    try:
+      data = pkgutil.get_data(__name__, "static/" + real_path)
+    except AttributeError:  # Python < 2.6.
+      data = None
+    self.response.out.write(data or open(path).read())
 
 
 class ListConfigsHandler(base_handler.GetJsonHandler):
@@ -365,13 +362,12 @@ class GetJobDetailHandler(base_handler.GetJsonHandler):
 
         # Specific to detail page.
         "chart_url": job.chart_url,
+        "chart_width": job.chart_width,
     })
     self.json_response["result_status"] = job.result_status
 
-    shards_list = model.ShardState.find_by_mapreduce_state(job)
     all_shards = []
-    shards_list.sort(key=lambda x: x.shard_number)
-    for shard in shards_list:
+    for shard in model.ShardState.find_all_by_mapreduce_state(job):
       out = {
           "active": shard.active,
           "result_status": shard.result_status,
@@ -384,4 +380,5 @@ class GetJobDetailHandler(base_handler.GetJsonHandler):
       }
       out.update(shard.counters_map.to_json())
       all_shards.append(out)
+    all_shards.sort(key=lambda x: x["shard_number"])
     self.json_response["shards"] = all_shards

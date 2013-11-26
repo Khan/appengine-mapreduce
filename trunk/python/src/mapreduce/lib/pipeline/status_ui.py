@@ -18,14 +18,15 @@
 
 import logging
 import os
+import pkgutil
 import traceback
-import zipfile
 
 from google.appengine.api import users
 from google.appengine.ext import webapp
 
 # Relative imports
 from mapreduce.lib import simplejson
+import util
 
 
 class _StatusUiHandler(webapp.RequestHandler):
@@ -85,19 +86,14 @@ class _StatusUiHandler(webapp.RequestHandler):
 
     relative_path, content_type = self._RESOURCE_MAP[resource]
     path = os.path.join(os.path.dirname(__file__), relative_path)
-
-    # It's possible we're inside a zipfile (zipimport).  If so,
-    # __file__ will start with 'something.zip'.
-    if ('.zip' + os.sep) in path:
-      (zip_file, zip_path) = os.path.relpath(path).split('.zip' + os.sep, 1)
-      content = zipfile.ZipFile(zip_file + '.zip').read(zip_path)
-    else:
-      content = open(path, 'rb').read()
-
     if not pipeline._DEBUG:
       self.response.headers["Cache-Control"] = "public, max-age=300"
     self.response.headers["Content-Type"] = content_type
-    self.response.out.write(content)
+    try:
+      data = pkgutil.get_data(__name__, relative_path)
+    except AttributeError:  # Python < 2.6.
+      data = None
+    self.response.out.write(data or open(path, 'rb').read())
 
 
 class _BaseRpcHandler(webapp.RequestHandler):
@@ -125,13 +121,13 @@ class _BaseRpcHandler(webapp.RequestHandler):
     self.json_response = {}
     try:
       self.handle()
-      output = simplejson.dumps(self.json_response)
+      output = simplejson.dumps(self.json_response, cls=util.JsonEncoder)
     except Exception, e:
       self.json_response.clear()
       self.json_response['error_class'] = e.__class__.__name__
       self.json_response['error_message'] = str(e)
       self.json_response['error_traceback'] = traceback.format_exc()
-      output = simplejson.dumps(self.json_response)
+      output = simplejson.dumps(self.json_response, cls=util.JsonEncoder)
 
     self.response.set_status(200)
     self.response.headers['Content-Type'] = 'text/javascript'

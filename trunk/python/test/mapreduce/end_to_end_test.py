@@ -7,20 +7,24 @@
 
 
 
+import datetime
 import random
 import string
 import unittest
 
-from mapreduce.lib import files
-from mapreduce.lib.files import records
+from google.appengine.api import files
 from google.appengine.ext import db
 from mapreduce import control
+from mapreduce import handlers
 from mapreduce import model
 from mapreduce import output_writers
+from mapreduce import parameters
+from mapreduce import records
 from mapreduce import test_support
 from testlib import testutil
-from mapreduce import util
 from google.appengine.ext import ndb
+
+# pylint: disable=g-bad-name
 
 
 def random_string(length):
@@ -32,6 +36,7 @@ def random_string(length):
 class TestEntity(db.Model):
   """Test entity class."""
   int_property = db.IntegerProperty()
+  dt = db.DateTimeProperty(default=datetime.datetime(2000, 1, 1))
 
 
 class NdbTestEntity(ndb.Model):
@@ -61,6 +66,34 @@ class TestHandler(object):
     TestHandler.processed_entites = []
 
 
+class SerializableHandler(object):
+  """Handler that utilize serialization."""
+
+  _next_instance_id = 0
+  # The first few instances will keep raising errors.
+  # This is to test that upon shard retry, shard creates a new handler.
+  INSTANCES_THAT_RAISE_ERRORS = 3
+  # The first instance is created for validation and not used by any shard.
+  FAILURES_INDUCED_BY_INSTANCE = INSTANCES_THAT_RAISE_ERRORS - 1
+
+  def __init__(self):
+    self.count = 0
+    self.instance = self.__class__._next_instance_id
+    self.__class__._next_instance_id += 1
+
+  def __call__(self, entity):
+    if self.instance < self.INSTANCES_THAT_RAISE_ERRORS:
+      raise files.FinalizationError("Injected error.")
+    # Increment the int property by one on every call.
+    entity.int_property = self.count
+    entity.put()
+    self.count += 1
+
+  @classmethod
+  def reset(cls):
+    cls._next_instance_id = 0
+
+
 def test_handler_yield_key(entity):
   """Test handler which yields entity key."""
   yield entity.key()
@@ -88,20 +121,16 @@ class TestOutputWriter(output_writers.OutputWriter):
     pass
 
   @classmethod
-  def init_job(cls, mapreduce_state):
-    random_str = "".join(
-        random.choice(string.ascii_uppercase + string.digits)
-        for _ in range(64))
-    mapreduce_state.mapreduce_spec.params["writer_filename"] = random_str
-    cls.file_contents[random_str] = []
-
-  @classmethod
   def finalize_job(cls, mapreduce_state):
     pass
 
   @classmethod
-  def create(cls, mapreduce_state, shard_number):
-    return cls(mapreduce_state.mapreduce_spec.params["writer_filename"])
+  def create(cls, mr_spec, shard_number, shard_attempt, _writer_state=None):
+    random_str = "".join(
+        random.choice(string.ascii_uppercase + string.digits)
+        for _ in range(64))
+    cls.file_contents[random_str] = []
+    return cls(random_str)
 
   def to_json(self):
     return {"filename": self.filename}
@@ -110,7 +139,7 @@ class TestOutputWriter(output_writers.OutputWriter):
   def from_json(cls, json_dict):
     return cls(json_dict["filename"])
 
-  def write(self, data, ctx):
+  def write(self, data):
     self.file_contents[self.filename].append(data)
 
   def finalize(self, ctx, shard_number):
@@ -124,6 +153,41 @@ class EndToEndTest(testutil.HandlerTestBase):
     testutil.HandlerTestBase.setUp(self)
     TestHandler.reset()
     TestOutputWriter.reset()
+    self.original_slice_duration = parameters.config._SLICE_DURATION_SEC
+    SerializableHandler.reset()
+
+  def tearDown(self):
+    parameters.config._SLICE_DURATION_SEC = self.original_slice_duration
+
+  def testHandlerSerialization(self):
+    """Test serializable handler works with MR and shard retry."""
+    entity_count = 10
+
+    for _ in range(entity_count):
+      TestEntity(int_property=-1).put()
+
+    # Force handler to serialize on every call.
+    parameters.config._SLICE_DURATION_SEC = 0
+
+    control.start_map(
+        "test_map",
+        __name__ + ".SerializableHandler",
+        "mapreduce.input_readers.DatastoreInputReader",
+        {
+            "entity_kind": __name__ + "." + TestEntity.__name__,
+        },
+        shard_count=1,
+        base_path="/mapreduce_base_path")
+
+    task_run_counts = test_support.execute_until_empty(self.taskqueue)
+    self.assertEquals(
+        task_run_counts[handlers.MapperWorkerCallbackHandler],
+        # Shard retries + one per entity + one to exhaust input reader
+        SerializableHandler.FAILURES_INDUCED_BY_INSTANCE + entity_count + 1)
+    vals = [e.int_property for e in TestEntity.all()]
+    vals.sort()
+    # SerializableHandler updates int_property to be incremental from 0 to 9.
+    self.assertEquals(range(10), vals)
 
   def testLotsOfEntities(self):
     entity_count = 1000
@@ -143,7 +207,6 @@ class EndToEndTest(testutil.HandlerTestBase):
 
     test_support.execute_until_empty(self.taskqueue)
     self.assertEquals(entity_count, len(TestHandler.processed_entites))
-    self.assertEquals([], model.ShardState.all().fetch(100))
 
   def testEntityQuery(self):
     entity_count = 1000
@@ -157,14 +220,15 @@ class EndToEndTest(testutil.HandlerTestBase):
         "mapreduce.input_readers.DatastoreInputReader",
         {
             "entity_kind": __name__ + "." + TestEntity.__name__,
-            "filters": [("int_property", "=", 3)],
+            "filters": [("int_property", "=", 3),
+                        # Test datetime can be json serialized.
+                        ("dt", "=", datetime.datetime(2000, 1, 1))],
         },
         shard_count=4,
         base_path="/mapreduce_base_path")
 
     test_support.execute_until_empty(self.taskqueue)
     self.assertEquals(200, len(TestHandler.processed_entites))
-    self.assertEquals([], model.ShardState.all().fetch(100))
 
   def testLotsOfNdbEntities(self):
     entity_count = 1000
@@ -184,7 +248,6 @@ class EndToEndTest(testutil.HandlerTestBase):
 
     test_support.execute_until_empty(self.taskqueue)
     self.assertEquals(entity_count, len(TestHandler.processed_entites))
-    self.assertEquals([], model.ShardState.all().fetch(100))
 
   def testInputReaderDedicatedParameters(self):
     entity_count = 100
@@ -206,7 +269,6 @@ class EndToEndTest(testutil.HandlerTestBase):
 
     test_support.execute_until_empty(self.taskqueue)
     self.assertEquals(entity_count, len(TestHandler.processed_entites))
-    self.assertEquals([], model.ShardState.all().fetch(100))
 
   def testOutputWriter(self):
     """End-to-end test with output writer."""
@@ -227,32 +289,8 @@ class EndToEndTest(testutil.HandlerTestBase):
         output_writer_spec=__name__ + ".TestOutputWriter")
 
     test_support.execute_until_empty(self.taskqueue)
-    self.assertEquals(1, len(TestOutputWriter.file_contents))
     self.assertEquals(entity_count,
-                      len(TestOutputWriter.file_contents.values()[0]))
-
-  def testNdbOutputWriter(self):
-    """End-to-end test with output writer."""
-    entity_count = 1000
-
-    for i in range(entity_count):
-      NdbTestEntity().put()
-
-    mapreduce_id = control.start_map(
-        "test_map",
-        __name__ + ".test_handler_yield_ndb_key",
-        "mapreduce.input_readers.DatastoreInputReader",
-        {
-            "entity_kind": __name__ + "." + NdbTestEntity.__name__,
-        },
-        shard_count=4,
-        base_path="/mapreduce_base_path",
-        output_writer_spec=__name__ + ".TestOutputWriter")
-
-    test_support.execute_until_empty(self.taskqueue)
-    self.assertEquals(1, len(TestOutputWriter.file_contents))
-    self.assertEquals(entity_count,
-                      len(TestOutputWriter.file_contents.values()[0]))
+                      sum(map(len, TestOutputWriter.file_contents.values())))
 
   def testRecordsReader(self):
     """End-to-end test for records reader."""
@@ -308,7 +346,7 @@ class EndToEndTest(testutil.HandlerTestBase):
 
     test_support.execute_until_empty(self.taskqueue)
     self.assertEquals(100, len(TestHandler.processed_entites))
-    self.assertEquals([], util._HugeTaskPayload.all().fetch(100))
+    self.assertEquals([], model._HugeTaskPayload.all().fetch(100))
 
   def testHugeTaskUseDatastore(self):
     """Test map job with huge parameter values."""
@@ -338,7 +376,7 @@ class EndToEndTest(testutil.HandlerTestBase):
 
     test_support.execute_until_empty(self.taskqueue)
     self.assertEquals(100, len(TestHandler.processed_entites))
-    self.assertEquals([], util._HugeTaskPayload.all().fetch(100))
+    self.assertEquals([], model._HugeTaskPayload.all().fetch(100))
 
 
 if __name__ == "__main__":

@@ -10,12 +10,12 @@ import unittest
 
 
 from mapreduce.lib import pipeline
-from mapreduce.lib import files
-from mapreduce.lib.files import records
+from google.appengine.api import files
 from google.appengine.ext import db
 from mapreduce import input_readers
 from mapreduce import mapreduce_pipeline
 from mapreduce import output_writers
+from mapreduce import records
 from mapreduce import test_support
 from testlib import testutil
 

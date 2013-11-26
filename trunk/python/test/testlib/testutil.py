@@ -14,54 +14,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Test utilities for mapreduce framework.
-"""
+"""Test utilities for mapreduce framework."""
 
 
 
-# Disable "Invalid method name"
-# pylint: disable-msg=C6409
+# pylint: disable=g-bad-name
+# pylint: disable=g-import-not-at-top
+# pylint: disable=invalid-import-order
 
 # os_compat must be first to ensure timezones are UTC.
 # Disable "unused import" and "invalid import order"
-# pylint: disable-msg=W0611
+# pylint: disable=unused-import
 from google.appengine.tools import os_compat
-# pylint: enable-msg=W0611
+# pylint: enable=unused-import
 
+import imp
 from testlib import mox
 import os
-import shutil
 import sys
-import tempfile
 import unittest
-import urllib
 
-from google.appengine.api import apiproxy_stub_map
-from google.appengine.api.files import file_service_stub
-from google.appengine.api.blobstore import blobstore_stub
-from google.appengine.api import datastore_file_stub
 from google.appengine.api import queueinfo
-from google.appengine.api.blobstore import file_blob_storage
-from google.appengine.api.memcache import memcache_stub
-from google.appengine.api.taskqueue import taskqueue_stub
+from google.appengine.datastore import datastore_stub_util
+from google.appengine.ext import testbed
 
+# TODO(user): Cleanup imports if/when cloudstorage becomes part of runtime.
+try:
+  # Check if the full cloudstorage package exists. The stub part is in runtime.
+  import cloudstorage
+  enable_cloudstorage_tests = True
+  if hasattr(cloudstorage, "_STUB"):
+    cloudstorage = None
+except ImportError:
+  cloudstorage = None
 
-class MatchesDatastoreConfig(mox.Comparator):
-  """Mox comparator for MatchesDatastoreConfig objects."""
-
-  def __init__(self, **kwargs):
-    self.kwargs = kwargs
-
-  def equals(self, config):
-    """Check to see if config matches arguments."""
-    if self.kwargs.get("deadline", None) != config.deadline:
-      return False
-    if self.kwargs.get("force_writes", None) != config.force_writes:
-      return False
-    return True
-
-  def __repr__(self):
-    return "MatchesDatastoreConfig(%s)" % self.kwargs
+# pylint: disable=unused-import
+try:
+  import mock
+except ImportError, e:
+  _NAME = os.environ.get("ROOT_PACKAGE_NAME")
+  if not _NAME:
+    raise e
+  mod = sys.modules.setdefault(_NAME, imp.new_module(_NAME))
+  mod.__path__ = [os.environ["ROOT_PACKAGE_PATH"]]
+  import mock
 
 
 class MatchesUserRPC(mox.Comparator):
@@ -90,13 +86,35 @@ class HandlerTestBase(unittest.TestCase):
     self.mox = mox.Mox()
 
     self.appid = "testapp"
-    self.version_id = "1.23456789"
+    self.major_version_id = "1"
+    self.version_id = self.major_version_id + ".23456789"
+    self.module_id = "foo_module"
+    self.host = "%s.%s.%s" % (
+        self.major_version_id, self.module_id, "testapp.appspot.com")
+
+    self.testbed = testbed.Testbed()
+    self.testbed.activate()
+
     os.environ["APPLICATION_ID"] = self.appid
     os.environ["CURRENT_VERSION_ID"] = self.version_id
-    os.environ["HTTP_HOST"] = "localhost"
+    os.environ["CURRENT_MODULE_ID"] = self.module_id
+    os.environ["DEFAULT_VERSION_HOSTNAME"] = "%s.appspot.com" % self.appid
+    os.environ["HTTP_HOST"] = self.host
 
-    self.memcache = memcache_stub.MemcacheServiceStub()
-    self.taskqueue = taskqueue_stub.TaskQueueServiceStub()
+    self.testbed.init_app_identity_stub()
+    self.testbed.init_blobstore_stub()
+    # HRD with no eventual consistency.
+    policy = datastore_stub_util.PseudoRandomHRConsistencyPolicy(probability=1)
+    self.testbed.init_datastore_v3_stub(consistency_policy=policy)
+    self.testbed.init_logservice_stub()
+    self.testbed.init_files_stub()
+    self.testbed.init_memcache_stub()
+    self.testbed.init_taskqueue_stub()
+    self.testbed.init_urlfetch_stub()
+
+    # For backwards compatibility, maintain easy references to some stubs
+    self.taskqueue = self.testbed.get_stub(testbed.TASKQUEUE_SERVICE_NAME)
+
     self.taskqueue.queue_yaml_parser = (
         lambda x: queueinfo.LoadSingleQueue(
             "queue:\n"
@@ -105,34 +123,39 @@ class HandlerTestBase(unittest.TestCase):
             "- name: crazy-queue\n"
             "  rate: 2000/d\n"
             "  bucket_size: 10\n"))
-    self.datastore = datastore_file_stub.DatastoreFileStub(
-        self.appid, "/dev/null", "/dev/null")
-
-    self.blob_storage_directory = tempfile.mkdtemp()
-    blob_storage = file_blob_storage.FileBlobStorage(
-        self.blob_storage_directory, self.appid)
-    self.blobstore_stub = blobstore_stub.BlobstoreServiceStub(blob_storage)
-    self.file_service = self.createFileServiceStub(blob_storage)
-
-    apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
-    apiproxy_stub_map.apiproxy.RegisterStub("taskqueue", self.taskqueue)
-    apiproxy_stub_map.apiproxy.RegisterStub("memcache", self.memcache)
-    apiproxy_stub_map.apiproxy.RegisterStub("datastore_v3", self.datastore)
-    apiproxy_stub_map.apiproxy.RegisterStub("blobstore", self.blobstore_stub)
-    apiproxy_stub_map.apiproxy.RegisterStub("file", self.file_service)
-
-  def createFileServiceStub(self, blob_storage):
-    return file_service_stub.FileServiceStub(blob_storage)
 
   def tearDown(self):
     try:
       self.mox.VerifyAll()
     finally:
       self.mox.UnsetStubs()
-      shutil.rmtree(self.blob_storage_directory)
+
+    del os.environ["APPLICATION_ID"]
+    del os.environ["CURRENT_VERSION_ID"]
+    del os.environ["CURRENT_MODULE_ID"]
+    del os.environ["DEFAULT_VERSION_HOSTNAME"]
+    del os.environ["HTTP_HOST"]
+
+    self.testbed.deactivate()
+
     unittest.TestCase.tearDown(self)
 
   def assertTaskStarted(self, queue="default"):
     tasks = self.taskqueue.GetTasks(queue)
     self.assertEquals(1, len(tasks))
     self.assertEquals(tasks[0]["url"], self.MAPREDUCE_URL)
+
+
+class CloudStorageTestBase(HandlerTestBase):
+  """Test base class that ensures cloudstorage library is available."""
+
+  def setUp(self):
+    if cloudstorage is None:
+      # skipTest is only supported starting in Python 2.7, prior to 2.7
+      # the test will result in an error due to the ImportWarning
+      if sys.version_info < (2, 7):
+        raise ImportWarning("Unable to test Google Cloud Storage. "
+                            "Library not found,")
+      else:
+        self.skipTest("Unable to test Google Cloud Storage. Library not found.")
+    super(CloudStorageTestBase, self).setUp()

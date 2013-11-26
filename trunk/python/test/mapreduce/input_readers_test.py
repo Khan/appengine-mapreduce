@@ -18,40 +18,63 @@
 
 
 # Disable "Invalid method name"
-# pylint: disable-msg=C6409
+# pylint: disable=g-bad-name
 
 # os_compat must be first to ensure timezones are UTC.
-
-from google.appengine.tools import os_compat  # pylint: disable-msg=W0611
+# pylint: disable=g-bad-import-order
+from google.appengine.tools import os_compat  # pylint: disable=unused-import
 
 import cStringIO
-from testlib import mox
+import datetime
+import logging
+import math
 import os
+import random
 import string
+import tempfile
 import time
 import unittest
 import zipfile
 
+from testlib import mox
+
+from google.appengine.datastore import entity_pb
+from google.appengine.ext import ndb
 from google.appengine.api import apiproxy_stub_map
-from google.appengine.api.blobstore import blobstore_stub
-from google.appengine.api.blobstore import dict_blob_storage
 from google.appengine.api import datastore
 from google.appengine.api import datastore_file_stub
-from mapreduce.lib import files
-from mapreduce.lib.files import records
+from google.appengine.api import datastore_types
+from google.appengine.api import files
+from google.appengine.api.files import file_service_pb
 from google.appengine.api import logservice
+from google.appengine.api import namespace_manager
+from google.appengine.api.blobstore import blobstore_stub
+from google.appengine.api.blobstore import dict_blob_storage
 from google.appengine.api.logservice import log_service_pb
 from google.appengine.api.logservice import logservice_stub
-from google.appengine.api import namespace_manager
+from google.appengine.datastore import datastore_stub_util
 from google.appengine.ext import blobstore
 from google.appengine.ext import db
-from mapreduce.lib import key_range
+from google.appengine.ext import key_range
+from google.appengine.ext import testbed
 from google.appengine.ext.blobstore import blobstore as blobstore_internal
 from mapreduce import errors
+from mapreduce import file_format_root
 from mapreduce import input_readers
+from mapreduce import json_util
 from mapreduce import model
 from mapreduce import namespace_range
+from mapreduce import records
 from testlib import testutil
+
+
+# pylint: disable=g-import-not-at-top
+# TODO(user): Cleanup imports if/when cloudstorage becomes part of runtime.
+try:
+  import cloudstorage
+  enable_cloudstorage_tests = True
+except ImportError:
+  enable_cloudstorage_tests = False
 
 
 class TestJsonType(object):
@@ -71,10 +94,22 @@ class TestJsonType(object):
 class TestEntity(db.Model):
   """Test entity class."""
 
-  json_property = model.JsonProperty(TestJsonType)
-  json_property_default_value = model.JsonProperty(
+  json_property = json_util.JsonProperty(TestJsonType)
+  json_property_default_value = json_util.JsonProperty(
       TestJsonType, default=TestJsonType())
   int_property = db.IntegerProperty()
+  datetime_property = db.DateTimeProperty(auto_now=True)
+
+  a = db.IntegerProperty()
+  b = db.IntegerProperty()
+
+
+class NdbTestEntity(ndb.Model):
+  datetime_property = ndb.DateTimeProperty(auto_now=True)
+
+  a = ndb.IntegerProperty()
+  b = ndb.IntegerProperty()
+
 
 class TestEntityWithDot(db.Model):
   """Test entity class with dot in its kind."""
@@ -100,70 +135,74 @@ def key(entity_id, namespace=None, kind="TestEntity"):
   return db.Key.from_path(kind, entity_id, namespace=namespace)
 
 
-class DatastoreInputReaderTest(unittest.TestCase):
-  """Test Datastore{,Key,Entity}InputReader classes."""
+def set_scatter_setter(key_names_to_vals):
+  """Monkey patch the scatter property setter.
+
+  Args:
+    key_names_to_vals: a dict from key_name to scatter property value.
+      The value will be casted to str as the scatter property is. Entities
+      who key is in the map will have the corresponding scatter property.
+  """
+
+  def _get_scatter_property(entity_proto):
+    key_name = entity_proto.key().path().element_list()[-1].name()
+    if key_name in key_names_to_vals:
+      scatter_property = entity_pb.Property()
+      scatter_property.set_name(datastore_types.SCATTER_SPECIAL_PROPERTY)
+      scatter_property.set_meaning(entity_pb.Property.BYTESTRING)
+      scatter_property.set_multiple(False)
+      property_value = scatter_property.mutable_value()
+      property_value.set_stringvalue(str(key_names_to_vals[key_name]))
+      return scatter_property
+  datastore_stub_util._SPECIAL_PROPERTY_MAP[
+      datastore_types.SCATTER_SPECIAL_PROPERTY] = (
+          False, True, _get_scatter_property)
+
+
+def _create_entities(keys_itr,
+                     key_to_scatter_val,
+                     ns=None,
+                     entity_model_cls=TestEntity):
+  """Create entities for tests.
+
+  Args:
+    keys_itr: an iterator that contains all the key names.
+    key_to_scatter_val: a dict that maps key names to its scatter values.
+    ns: the namespace to create the entity at.
+    entity_model_cls: entity model class.
+
+  Returns:
+    A list of entities created.
+  """
+  namespace_manager.set_namespace(ns)
+  set_scatter_setter(key_to_scatter_val)
+  entities = []
+  for k in keys_itr:
+    entity = entity_model_cls(key_name=str(k))
+    entities.append(entity)
+    entity.put()
+  namespace_manager.set_namespace(None)
+  return entities
+
+
+class AbstractDatastoreInputReaderTest(unittest.TestCase):
+  """Tests for AbstractDatastoreInputReader."""
 
   def setUp(self):
-    unittest.TestCase.setUp(self)
+    self.testbed = testbed.Testbed()
     self.appid = "testapp"
     os.environ["APPLICATION_ID"] = self.appid
-    os.environ["AUTH_DOMAIN"] = "gmail.com"
-    self.resetDatastore()
+    self.testbed.activate()
+    self.testbed.init_datastore_v3_stub()
+    self.testbed.init_memcache_stub()
     namespace_manager.set_namespace(None)
 
-  def resetDatastore(self, require_indexes=False):
-    self.datastore = datastore_file_stub.DatastoreFileStub(
-        self.appid, "/dev/null", "/dev/null", require_indexes=require_indexes)
-
-    apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
-    apiproxy_stub_map.apiproxy.RegisterStub("datastore_v3", self.datastore)
-
-  def split_into_key_ranges(self, shard_count, namespace=None):
-    """Generate TestEntity split.
-
-    This method assumes that the entity data will be split by KeyRange.
-
-    Args:
-      shard_count: number of shards to split into as int.
-      namespace: the namespace to consider in the mapreduce. If not set then all
-          namespaces are considered.
-
-    Returns:
-      list of key_range.KeyRange.
-    """
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        {"entity_kind": ENTITY_KIND,
-         "namespace": namespace},
-        shard_count)
-    ds_input_readers = input_readers.DatastoreInputReader.split_input(
-        mapper_spec)
-    return [
-        input_reader._key_ranges or input_reader._ns_range
-        for input_reader in ds_input_readers]
-
-  def split_into_namespace_ranges(self, shard_count):
-    """Generate TestEntity split.
-
-    This method assumes that the entity data will be split by NamespaceRange.
-
-    Args:
-      shard_count: number of shards to split into as int.
-
-    Returns:
-      list of namespace_range.NamespaceRange.
-    """
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        {"entity_kind": ENTITY_KIND},
-        shard_count)
-    ds_input_readers = input_readers.DatastoreInputReader.split_input(
-        mapper_spec)
-    ns_ranges = [input_reader._ns_range for input_reader in ds_input_readers]
-    assert all(ns_ranges)
-    return ns_ranges
+  def tearDown(self):
+    # Restore the scatter property setter to the original one.
+    datastore_stub_util._SPECIAL_PROPERTY_MAP[
+        datastore_types.SCATTER_SPECIAL_PROPERTY] = (
+            False, True, datastore_stub_util._GetScatterProperty)
+    self.testbed.deactivate()
 
   def testValidate_Passes(self):
     """Test validate function accepts valid parameters."""
@@ -174,7 +213,7 @@ class DatastoreInputReaderTest(unittest.TestCase):
         "FooHandler",
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
-    input_readers.DatastoreInputReader.validate(mapper_spec)
+    input_readers.AbstractDatastoreInputReader.validate(mapper_spec)
 
   def testValidate_NoEntityFails(self):
     """Test validate function raises exception with no entity parameter."""
@@ -184,63 +223,20 @@ class DatastoreInputReaderTest(unittest.TestCase):
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
     self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
+                      input_readers.AbstractDatastoreInputReader.validate,
                       mapper_spec)
 
-  def testValidate_KeysOnly(self):
-    """Test validate function rejects keys_only parameter."""
-    # Setting keys_only to true is an error.
-    params = {
-        "entity_kind": ENTITY_KIND,
-        "keys_only": "True"
-        }
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-
-  def testValidate_MissingEntityKind(self):
-    """Test validate function fails without entity kind."""
-    # Setting keys_only to true is an error.
-    params = {}
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-
-
-  def testValidate_BadEntityKind(self):
+  def testValidate_EntityKindWithNoModel(self):
     """Test validate function with bad entity kind."""
     params = {
         "entity_kind": "foo",
         }
+
     mapper_spec = model.MapperSpec(
         "FooHandler",
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-    # Entity & Key reader should be ok.
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers."
-            "DatastoreEntityInputReader",
-        params, 1)
-    input_readers.DatastoreEntityInputReader.validate(mapper_spec)
-
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers."
-            "DatastoreKeyInputReader",
-        params, 1)
-    input_readers.DatastoreKeyInputReader.validate(mapper_spec)
+    input_readers.AbstractDatastoreInputReader.validate(mapper_spec)
 
   def testValidate_BadBatchSize(self):
     """Test validate function rejects bad entity kind."""
@@ -254,7 +250,7 @@ class DatastoreInputReaderTest(unittest.TestCase):
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
     self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
+                      input_readers.AbstractDatastoreInputReader.validate,
                       mapper_spec)
     params = {
         "entity_kind": ENTITY_KIND,
@@ -265,7 +261,7 @@ class DatastoreInputReaderTest(unittest.TestCase):
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
     self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
+                      input_readers.AbstractDatastoreInputReader.validate,
                       mapper_spec)
     params = {
         "entity_kind": ENTITY_KIND,
@@ -276,21 +272,7 @@ class DatastoreInputReaderTest(unittest.TestCase):
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
     self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-
-  def testValidate_Namespaces(self):
-    """Tests validate function rejects namespaces param."""
-    params = {
-        "entity_kind": ENTITY_KIND,
-        "namespaces": "hello"
-        }
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
+                      input_readers.AbstractDatastoreInputReader.validate,
                       mapper_spec)
 
   def testValidate_WrongTypeNamespace(self):
@@ -304,126 +286,8 @@ class DatastoreInputReaderTest(unittest.TestCase):
         "mapreduce.input_readers.DatastoreInputReader",
         params, 1)
     self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
+                      input_readers.AbstractDatastoreInputReader.validate,
                       mapper_spec)
-
-  def testValidate_Filters(self):
-    """Tests validating filters parameter."""
-    params = {
-        "entity_kind": ENTITY_KIND,
-        "filters": [("a", "=", 1), ("b", "=", 2)],
-        }
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    input_readers.DatastoreInputReader.validate(mapper_spec)
-
-    params["filters"] = {"a": "1"}
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-
-    params["filters"] = [("a", "<=", 1)]
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-
-    params["filters"] = [(1, "=", 1)]
-    self.assertRaises(input_readers.BadReaderParamsError,
-                      input_readers.DatastoreInputReader.validate,
-                      mapper_spec)
-
-  def testParameters(self):
-    """Test that setting string parameters as they would be passed from a
-    web interface works.
-    """
-    for _ in range(0, 100):
-      TestEntity().put()
-
-    namespace_manager.set_namespace("google")
-    for _ in range(0, 100):
-      TestEntity().put()
-
-    namespace_manager.set_namespace("ibm")
-    for _ in range(0, 100):
-      TestEntity().put()
-
-    namespace_manager.set_namespace(None)
-
-    krange = key_range.KeyRange(key_start=key(25), key_end=key(50),
-                                direction="ASC",
-                                include_start=False, include_end=True)
-
-    params = {}
-    params["app"] = "blah"
-    params["batch_size"] = "42"
-    params["entity_kind"] = ENTITY_KIND
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    reader = input_readers.DatastoreInputReader.split_input(
-        mapper_spec)
-    self.assertEquals(input_readers.DatastoreInputReader, reader[0].__class__)
-    self.assertEquals(42, reader[0]._batch_size)
-    self.assertEquals(set(["", "ibm", "google"]),
-                      set(k.namespace for k in reader[0]._key_ranges))
-
-    params["batch_size"] = "24"
-    params["namespace"] = ""
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    reader = input_readers.DatastoreInputReader.split_input(
-        mapper_spec)
-    self.assertEquals(24, reader[0]._batch_size)
-    self.assertEquals([""], [k.namespace for k in reader[0]._key_ranges])
-
-    # Setting keys_only to false is OK (it's ignored.)
-    params["keys_only"] = "False"
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
-        params, 1)
-    reader = input_readers.DatastoreInputReader.split_input(
-        mapper_spec)
-
-    # But it's totally ignored on the DatastoreKeyInputReader.
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers."
-        "DatastoreKeyInputReader",
-        params, 1)
-    reader = input_readers.DatastoreKeyInputReader.split_input(mapper_spec)
-
-    del params["keys_only"]
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers."
-        "DatastoreKeyInputReader",
-        params, 1)
-    reader = input_readers.DatastoreKeyInputReader.split_input(
-        mapper_spec)
-    self.assertEquals(input_readers.DatastoreKeyInputReader,
-                      reader[0].__class__)
-
-    # Coverage test: DatastoreEntityInputReader
-    mapper_spec = model.MapperSpec(
-        "FooHandler",
-        "mapreduce.input_readers."
-        "DatastoreEntityInputReader",
-        params, 1)
-    reader = input_readers.DatastoreEntityInputReader.split_input(mapper_spec)
-    self.assertEquals(input_readers.DatastoreEntityInputReader,
-                      reader[0].__class__)
-
-  def testSplitNoData(self):
-    """Full namespace range should be produced if there's no data."""
-    self.assertEquals(
-        [namespace_range.NamespaceRange()],
-        self.split_into_key_ranges(10))
 
   def testChooseSplitPoints(self):
     """Tests AbstractDatastoreInputReader._choose_split_points."""
@@ -448,445 +312,737 @@ class DatastoreInputReaderTest(unittest.TestCase):
         input_readers.AbstractDatastoreInputReader._choose_split_points,
         sorted([0, 1, 7, 8, 9, 3, 2, 4, 6, 5]), 11)
 
-  def testSplitNotEnoughData(self):
+  def _assertEquals_splitNSByScatter(self, shards, expected, ns=""):
+    results = input_readers.RawDatastoreInputReader._split_ns_by_scatter(
+        shards, ns, "TestEntity", self.appid)
+    self.assertEquals(expected, results)
+
+  def testSplitNSByScatter_NotEnoughData(self):
     """Splits should not intersect, if there's not enough data for each."""
-    TestEntity().put()
-    TestEntity().put()
-    self.assertEquals([
-        [key_range.KeyRange(key_start=None,
-                            key_end=key(2),
-                            direction='ASC',
-                            include_start=False,
-                            include_end=False,
-                            namespace='')],
-        [key_range.KeyRange(key_start=key(2),
-                            key_end=None,
-                            direction='ASC',
-                            include_start=True,
-                            include_end=False,
-                            namespace='')],
-        [None], [None]
-        ],
-        self.split_into_key_ranges(4))
+    _create_entities(range(2), {"1": 1})
 
-  def testSplitNotEnoughDataSorts(self):
+    expected = [key_range.KeyRange(key_start=None,
+                                   key_end=key("1"),
+                                   direction="ASC",
+                                   include_start=False,
+                                   include_end=False,
+                                   namespace="",
+                                   _app=self.appid),
+                key_range.KeyRange(key_start=key("1"),
+                                   key_end=None,
+                                   direction="ASC",
+                                   include_start=True,
+                                   include_end=False,
+                                   namespace="",
+                                   _app=self.appid),
+                None, None]
+    self._assertEquals_splitNSByScatter(4, expected)
+
+  def testSplitNSByScatter_NotEnoughData2(self):
     """Splits should not intersect, if there's not enough data for each."""
-    TestEntity().put()
-    TestEntity().put()
-    TestEntity().put()
-    TestEntity().put()
-    self.assertEquals([
-        [key_range.KeyRange(key_start=None,
-                            key_end=key(2),
-                            direction='ASC',
-                            include_start=False,
-                            include_end=False,
-                            namespace='')],
-        [key_range.KeyRange(key_start=key(2),
-                            key_end=key(4),
-                            direction='ASC',
-                            include_start=True,
-                            include_end=False,
-                            namespace='')],
-        [key_range.KeyRange(key_start=key(4),
-                            key_end=None,
-                            direction='ASC',
-                            include_start=True,
-                            include_end=False,
-                            namespace='')],
-        [None]
-        ],
-        self.split_into_key_ranges(4))
+    _create_entities(range(10), {"2": 2, "4": 4})
+    expected = [key_range.KeyRange(key_start=None,
+                                   key_end=key("2"),
+                                   direction="ASC",
+                                   include_start=False,
+                                   include_end=False,
+                                   namespace="",
+                                   _app=self.appid),
+                key_range.KeyRange(key_start=key("2"),
+                                   key_end=key("4"),
+                                   direction="ASC",
+                                   include_start=True,
+                                   include_end=False,
+                                   namespace="",
+                                   _app=self.appid),
+                key_range.KeyRange(key_start=key("4"),
+                                   key_end=None,
+                                   direction="ASC",
+                                   include_start=True,
+                                   include_end=False,
+                                   namespace="",
+                                   _app=self.appid),
+                None]
+    self._assertEquals_splitNSByScatter(4, expected)
 
-  def testSplitLotsOfData(self):
-    """Test lots of data case."""
+  def testSplitNSByScatter_LotsOfData(self):
+    """Split lots of data for each shard."""
+    _create_entities(range(100),
+                     {"80": 80, "50": 50, "30": 30, "10": 10},
+                     ns="google")
+    expected = [key_range.KeyRange(key_start=None,
+                                   key_end=key("30", namespace="google"),
+                                   direction="ASC",
+                                   include_start=False,
+                                   include_end=False,
+                                   namespace="google",
+                                   _app=self.appid),
+                key_range.KeyRange(key_start=key("30", namespace="google"),
+                                   key_end=key("80", namespace="google"),
+                                   direction="ASC",
+                                   include_start=True,
+                                   include_end=False,
+                                   namespace="google",
+                                   _app=self.appid),
+                key_range.KeyRange(key_start=key("80", namespace="google"),
+                                   key_end=None,
+                                   direction="ASC",
+                                   include_start=True,
+                                   include_end=False,
+                                   namespace="google",
+                                   _app=self.appid),
+               ]
+    self._assertEquals_splitNSByScatter(3, expected, ns="google")
 
-    for _ in range(0, 100):
-      TestEntity().put()
+  def testToKeyRangesByShard(self):
+    namespaces = [str(i) for i in range(3)]
+    for ns in namespaces:
+      _create_entities(range(10), {"5": 5}, ns)
+    shards = 2
 
-    namespace_manager.set_namespace("google")
-    for _ in range(0, 40):
-      TestEntity().put()
-    namespace_manager.set_namespace(None)
+    expected = [
+        key_range.KeyRange(key_start=None,
+                           key_end=key("5", namespace="0"),
+                           direction="ASC",
+                           include_start=False,
+                           include_end=False,
+                           namespace="0",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=None,
+                           key_end=key("5", namespace="1"),
+                           direction="ASC",
+                           include_start=False,
+                           include_end=False,
+                           namespace="1",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=None,
+                           key_end=key("5", namespace="2"),
+                           direction="ASC",
+                           include_start=False,
+                           include_end=False,
+                           namespace="2",
+                           _app=self.appid),
 
-    (reader1_key_ranges,
-     reader2_key_ranges,
-     reader3_key_ranges,
-     reader4_key_ranges) = self.split_into_key_ranges(4)
+        key_range.KeyRange(key_start=key("5", namespace="0"),
+                           key_end=None,
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="0",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=key("5", namespace="1"),
+                           key_end=None,
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="1",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=key("5", namespace="2"),
+                           key_end=None,
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="2",
+                           _app=self.appid),
+    ]
 
-    self.assertEquals(
-        [
-            key_range.KeyRange(key_start=None,
-                               key_end=key(113, namespace="google"),
-                               direction="ASC",
-                               include_start=False,
-                               include_end=False,
-                               namespace="google"),
-            key_range.KeyRange(key_start=None,
-                               key_end=key(25),
-                               direction="ASC",
-                               include_start=False,
-                               include_end=False),
-        ],
-        reader1_key_ranges)
+    kranges_by_shard = (
+        input_readers.AbstractDatastoreInputReader._to_key_ranges_by_shard(
+            self.appid, namespaces, shards,
+            model.QuerySpec(entity_kind="TestEntity")))
+    self.assertEquals(shards, len(kranges_by_shard))
 
-    self.assertEquals(
-        [
-            key_range.KeyRange(key_start=key(113, namespace="google"),
-                               key_end=key(120, namespace="google"),
-                               direction="ASC",
-                               include_start=True,
-                               include_end=False,
-                               namespace="google"),
-            key_range.KeyRange(key_start=key(25),
-                               key_end=key(48),
-                               direction="ASC",
-                               include_start=True,
-                               include_end=False),
-        ],
-        reader2_key_ranges)
+    expected.sort()
+    results = []
+    for kranges in kranges_by_shard:
+      results.extend(list(kranges))
+    results.sort()
+    self.assertEquals(expected, results)
 
-    self.assertEquals(
-        [
-            key_range.KeyRange(key_start=key(120, namespace="google"),
-                               key_end=key(134, namespace="google"),
-                               direction="ASC",
-                               include_start=True,
-                               include_end=False,
-                               namespace="google"),
-            key_range.KeyRange(key_start=key(48),
-                               key_end=key(67),
-                               direction="ASC",
-                               include_start=True,
-                               include_end=False),
-        ],
-        reader3_key_ranges)
+  def testToKeyRangesByShard_UnevenNamespaces(self):
+    namespaces = [str(i) for i in range(3)]
+    _create_entities(range(10), {"5": 5}, namespaces[0])
+    _create_entities(range(10), {"5": 5, "6": 6}, namespaces[1])
+    _create_entities(range(10), {"5": 5, "6": 6, "7": 7}, namespaces[2])
+    shards = 3
 
-    self.assertEquals(
-        [
-            key_range.KeyRange(key_start=key(134, namespace="google"),
-                               key_end=None,
-                               direction="ASC",
-                               include_start=True,
-                               include_end=False,
-                               namespace="google"),
-            key_range.KeyRange(key_start=key(67),
-                               key_end=None,
-                               direction="ASC",
-                               include_start=True,
-                               include_end=False),
-        ],
-        reader4_key_ranges)
+    expected = [
+        # shard 1
+        key_range.KeyRange(key_start=None,
+                           key_end=key("5", namespace="0"),
+                           direction="ASC",
+                           include_start=False,
+                           include_end=False,
+                           namespace="0",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=None,
+                           key_end=key("5", namespace="1"),
+                           direction="ASC",
+                           include_start=False,
+                           include_end=False,
+                           namespace="1",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=None,
+                           key_end=key("6", namespace="2"),
+                           direction="ASC",
+                           include_start=False,
+                           include_end=False,
+                           namespace="2",
+                           _app=self.appid),
+        # shard 2
+        key_range.KeyRange(key_start=key("5", namespace="0"),
+                           key_end=None,
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="0",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=key("5", namespace="1"),
+                           key_end=key("6", namespace="1"),
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="1",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=key("6", namespace="2"),
+                           key_end=key("7", namespace="2"),
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="2",
+                           _app=self.appid),
+        # shard 3
+        key_range.KeyRange(key_start=key("6", namespace="1"),
+                           key_end=None,
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="1",
+                           _app=self.appid),
+        key_range.KeyRange(key_start=key("7", namespace="2"),
+                           key_end=None,
+                           direction="ASC",
+                           include_start=True,
+                           include_end=False,
+                           namespace="2",
+                           _app=self.appid),
+    ]
+    kranges_by_shard = (
+        input_readers.AbstractDatastoreInputReader._to_key_ranges_by_shard(
+            self.appid, namespaces, shards,
+            model.QuerySpec(entity_kind="TestEntity")))
+    self.assertEquals(shards, len(kranges_by_shard))
 
-  def testSplitLotsOfDataWithSingleNamespaceSpecified(self):
-    """Split lots of data when a namespace param is given."""
-
-    for _ in range(0, 100):
-      TestEntity().put()
-
-    namespace_manager.set_namespace("google")
-    for _ in range(0, 40):
-      TestEntity().put()
-    namespace_manager.set_namespace(None)
-
-    (reader1_key_ranges,
-     reader2_key_ranges) = self.split_into_key_ranges(2, namespace="google")
-
-    self.assertEquals(
-        [key_range.KeyRange(key_start=None,
-                            key_end=key(120, namespace="google"),
-                            direction="ASC",
-                            include_start=False,
-                            include_end=False,
-                            namespace="google")],
-        reader1_key_ranges)
-
-    self.assertEquals(
-        [key_range.KeyRange(key_start=key(120, namespace="google"),
-                            key_end=None,
-                            direction="ASC",
-                            include_start=True,
-                            include_end=False,
-                            namespace="google")],
-        reader2_key_ranges)
-
-  def testSplitLotsOfNamespaces(self):
-    """Test splitting data with many namespaces."""
-    for namespace in string.lowercase:
-      namespace_manager.set_namespace(namespace)
-      TestEntity().put()
-    namespace_manager.set_namespace(None)
-
-    self.assertEquals(
-        set([namespace_range.NamespaceRange("", "m" + "z" * 99),
-             namespace_range.NamespaceRange("n", "z" * 100)]),
-        set(self.split_into_namespace_ranges(2)))
-
-  def testGeneratorWithKeyRanges(self):
-    """Test DatastoreInputReader as generator using KeyRanges."""
-    expected_entities = []
-    for _ in range(0, 100):
-      entity = TestEntity()
-      entity.put()
-      expected_entities.append(entity)
-
-    namespace_manager.set_namespace("google")
-    for _ in range(0, 100):
-      entity = TestEntity()
-      entity.put()
-      expected_entities.append(entity)
-    namespace_manager.set_namespace(None)
-
-    kranges = [key_range.KeyRange(key_start=key(25), key_end=key(50),
-                                  direction="ASC",
-                                  include_start=False, include_end=True),
-               key_range.KeyRange(key_start=key(110, namespace="google"),
-                                  key_end=key(150, namespace="google"),
-                                  direction="ASC",
-                                  include_start=False,
-                                  include_end=True,
-                                  namespace="google")]
-
-    query_range = input_readers.DatastoreInputReader(
-        ENTITY_KIND, key_ranges=kranges, ns_range=None, batch_size=50)
-
-    entities = []
-
-    for entity in query_range:
-      entities.append(entity)
-
-    self.assertEquals(65, len(entities))
-    # Model instances are not comparable, so we'll compare a serialization.
-    expected_values = [entity.to_xml() for entity
-                       in expected_entities[25:50] + expected_entities[110:150]]
-    actual_values = [entity.to_xml() for entity in entities]
-    self.assertEquals(expected_values, actual_values)
-
-  def testGeneratorWithNamespaceRange(self):
-    """Test DatastoreInputReader as generator using a NamespaceRange."""
-    expected_objects = []
-    expected_entities = []
-    for namespace in ["A", "B", "C", "D", "E"]:
-      namespace_manager.set_namespace(namespace)
-      for i in range(10):
-        entity = TestEntity()
-        entity.put()
-        if namespace in ["B", "C", "D"]:
-          if i == 0:
-            expected_objects.append(input_readers.ALLOW_CHECKPOINT)
-          expected_objects.append(entity)
-          expected_entities.append(entity)
-    namespace_manager.set_namespace(None)
-
-    ns_range = namespace_range.NamespaceRange("B", "D")
-
-    query_range = input_readers.DatastoreInputReader(
-        ENTITY_KIND, key_ranges=None, ns_range=ns_range, batch_size=50)
-
-    objects = []
-    entities = []
-
-    for o in query_range:
-      objects.append(o)
-      if o is not input_readers.ALLOW_CHECKPOINT:
-        entities.append(o)
-
-    self.assertEquals(len(expected_objects), len(objects))
-    self.assertEquals(input_readers.ALLOW_CHECKPOINT, objects[0])
-    self.assertEquals(input_readers.ALLOW_CHECKPOINT, objects[11])
-    self.assertEquals(input_readers.ALLOW_CHECKPOINT, objects[22])
-
-    # Model instances are not comparable, so we'll compare a serialization.
-    expected_values = [entity.to_xml() for entity in expected_entities]
-    actual_values = [entity.to_xml() for entity in entities]
-    self.assertEqual(expected_values, actual_values)
-
-  def testEntityGenerator(self):
-    """Test DatastoreEntityInputReader."""
-    expected_entities = []
-    for _ in range(0, 100):
-      model_instance = TestEntity()
-      model_instance.put()
-      expected_entities.append(model_instance._populate_internal_entity())
-
-    namespace_manager.set_namespace("google")
-    for _ in range(0, 100):
-      model_instance = TestEntity()
-      model_instance.put()
-      expected_entities.append(model_instance._populate_internal_entity())
-    namespace_manager.set_namespace(None)
-
-    kranges = [key_range.KeyRange(key_start=key(25), key_end=key(50),
-                                  direction="ASC",
-                                  include_start=False, include_end=True),
-               key_range.KeyRange(key_start=key(110, namespace="google"),
-                                  key_end=key(150, namespace="google"),
-                                  direction="ASC",
-                                  include_start=False,
-                                  include_end=True,
-                                  namespace="google")]
-
-    query_range = input_readers.DatastoreEntityInputReader(
-        TestEntity.kind(), key_ranges=kranges, ns_range=None, batch_size=50)
-
-    entities = []
-    for entity in query_range:
-      entities.append(entity)
-
-    self.assertEquals(65, len(entities))
-    self.assertEquals(expected_entities[25:50] +
-                      expected_entities[110:150],
-                      entities)
-
-  def testShardDescription(self):
-    """Tests the human-visible description of Datastore readers."""
-    for i in xrange(10):
-      TestEntity().put()
-    splits = self.split_into_key_ranges(2)
-    stringified = [str(s[0]) for s in splits]
-    self.assertEquals(
-        ["ASC(None to "
-         "datastore_types.Key.from_path(u'TestEntity', 6L, _app=u'testapp'))",
-         "ASC["
-         "datastore_types.Key.from_path(u'TestEntity', 6L, _app=u'testapp')"
-         " to None)"],
-        stringified)
-
-  def testFilterIter(self):
-    """Tests iterating over input with filter set."""
-    for i in range(0, 100):
-      TestEntity(int_property=(i % 5)).put()
-
-    reader = input_readers.DatastoreInputReader(
-        ENTITY_KIND,
-        key_ranges=[
-          key_range.KeyRange(
-            key_start=None,
-            key_end=None,
-            direction="ASC",
-            include_start=False,
-            include_end=False,
-            namespace="")],
-          ns_range=None,
-          batch_size=50,
-        filters=[("int_property", "=", 0)])
-
-    entities = []
-    for entity in reader:
-      self.assertEquals(0, entity.int_property)
-      entities.append(entity)
-    self.assertEquals(20, len(entities))
+    expected.sort()
+    results = []
+    for kranges in kranges_by_shard:
+      results.extend(list(kranges))
+    results.sort()
+    self.assertEquals(expected, results)
 
 
-class DatastoreKeyInputReaderTest(unittest.TestCase):
-  """Tests for DatastoreKeyInputReader."""
+class DatastoreInputReaderTestCommon(unittest.TestCase):
+  """Common tests for concrete DatastoreInputReaders."""
+
+  # Subclass should override with its own create entities function.
+  @property
+  def _create_entities(self):
+    return _create_entities
+
+  # Subclass should override with its own entity kind or model class path
+  @property
+  def entity_kind(self):
+    return "TestEntity"
+
+  # Subclass should override with its own reader class.
+  @property
+  def reader_cls(self):
+    return input_readers.RawDatastoreInputReader
+
+  def _get_keyname(self, entity):
+    """Get keyname from an entity of certain type."""
+    return entity.key().name()
+
+  # Subclass should override with its own assert equals.
+  def _assertEquals_splitInput(self, itr, keys):
+    """AssertEquals helper for splitInput tests.
+
+    Check the outputs from a single shard.
+
+    Args:
+      itr: input reader returned from splitInput.
+      keys: a set of expected key names from this iterator.
+    """
+    results = []
+    while True:
+      try:
+        results.append(self._get_keyname(iter(itr).next()))
+        itr = itr.__class__.from_json(itr.to_json())
+      except StopIteration:
+        break
+    results.sort()
+    keys.sort()
+    self.assertEquals(keys, results)
+
+  # Subclass should override with its own assert equals.
+  def _assertEqualsForAllShards_splitInput(self, keys, max_read, *itrs):
+    """AssertEquals helper for splitInput tests.
+
+    Check the outputs from all shards. This is used when sharding
+    has random factor.
+
+    Args:
+      keys: a set of expected key names from this iterator.
+      max_read: limit number of results read from the iterators before failing
+        or None for no limit. Useful for preventing infinite loops or bounding
+        the execution of the test.
+      *itrs: input readers returned from splitInput.
+    """
+    results = []
+    for itr in itrs:
+      while True:
+        try:
+          results.append(self._get_keyname(iter(itr).next()))
+          itr = itr.__class__.from_json(itr.to_json())
+          if max_read is not None and len(results) > max_read:
+            self.fail("Too many results found")
+        except StopIteration:
+          break
+    results.sort()
+    keys.sort()
+    self.assertEquals(keys, results)
 
   def setUp(self):
+    self.testbed = testbed.Testbed()
     unittest.TestCase.setUp(self)
-    self.appid = "testapp"
-    self.datastore = datastore_file_stub.DatastoreFileStub(
-        self.appid, "/dev/null", "/dev/null", require_indexes=False)
-
-    apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
-    apiproxy_stub_map.apiproxy.RegisterStub("datastore_v3", self.datastore)
+    self.testbed.activate()
+    self.testbed.init_datastore_v3_stub()
+    self.testbed.init_memcache_stub()
     namespace_manager.set_namespace(None)
+    self._original_max = (
+        self.reader_cls.MAX_NAMESPACES_FOR_KEY_SHARD)
+    self.reader_cls.MAX_NAMESPACES_FOR_KEY_SHARD = 2
 
-  def testValidate_Passes(self):
-    """Tests validation function even with invalid kind."""
+  def tearDown(self):
+    # Restore the scatter property set to the original one.
+    datastore_stub_util._SPECIAL_PROPERTY_MAP[
+        datastore_types.SCATTER_SPECIAL_PROPERTY] = (
+            False, True, datastore_stub_util._GetScatterProperty)
+    # Restore max limit on ns sharding.
+    self.reader_cls.MAX_NAMESPACES_FOR_KEY_SHARD = (
+        self._original_max)
+    self.testbed.deactivate()
+
+  def testSplitInput_withNs(self):
+    self._create_entities(range(3), {"1": 1}, "f")
     params = {
-        "entity_kind": "InvalidKind",
+        "entity_kind": self.entity_kind,
+        "namespace": "f",
         }
     mapper_spec = model.MapperSpec(
         "FooHandler",
-        "mapreduce.input_readers.DatastoreKeyInputReader",
-        params, 1)
-    input_readers.DatastoreKeyInputReader.validate(mapper_spec)
+        "InputReader",
+        params, 2)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(2, len(results))
+    self._assertEqualsForAllShards_splitInput(["0", "1", "2"], None, *results)
 
-  def testGenerator(self):
-    """Test generator functionality."""
-    expected_keys = []
-    for _ in range(0, 100):
-      expected_keys.append(TestEntity().put())
-
-    namespace_manager.set_namespace("google")
-    for _ in range(0, 100):
-      expected_keys.append(TestEntity().put())
-    namespace_manager.set_namespace(None)
-
-    kranges = [key_range.KeyRange(key_start=key(25), key_end=key(50),
-                                  direction="ASC",
-                                  include_start=False, include_end=True),
-               key_range.KeyRange(key_start=key(110, namespace="google"),
-                                  key_end=key(150, namespace="google"),
-                                  direction="ASC",
-                                  include_start=False,
-                                  include_end=True,
-                                  namespace="google")]
-    query_range = input_readers.DatastoreKeyInputReader(
-        TestEntity.kind(), key_ranges=kranges, ns_range=None, batch_size=50)
-
-    keys = []
-    for k in query_range:
-      keys.append(k)
-
-    self.assertEquals(65, len(keys))
-    self.assertEquals(expected_keys[25:50] + expected_keys[110:150], keys)
-
-  def testEntityKindWithDot(self):
-    """Test generator functionality."""
-    expected_keys = []
-    for _ in range(0, 5):
-      expected_keys.append(TestEntityWithDot().put())
-
-    params = {}
-    params["entity_kind"] = TestEntityWithDot.kind()
+  def testSplitInput_withNs_moreShardThanScatter(self):
+    self._create_entities(range(3), {"1": 1}, "f")
+    params = {
+        "entity_kind": self.entity_kind,
+        "namespace": "f",
+        }
     mapper_spec = model.MapperSpec(
         "FooHandler",
-        "mapreduce.input_readers.DatastoreInputReader",
+        "InputReader",
+        params, 4)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertTrue(len(results) >= 2)
+    self._assertEqualsForAllShards_splitInput(["0", "1", "2"], None, *results)
+
+  def testSplitInput_noEntity(self):
+    params = {
+        "entity_kind": self.entity_kind,
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
         params, 1)
-    readers = input_readers.DatastoreKeyInputReader.split_input(
-        mapper_spec)
-    self.assertEquals(1, len(readers))
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(None, results)
 
-    keys = []
-    for k in readers[0]:
-      keys.append(k)
-    self.assertEquals(expected_keys, keys)
+  def testSplitInput_moreThanOneNS(self):
+    self._create_entities(range(3), {"1": 1}, "1")
+    self._create_entities(range(10, 13), {"11": 11}, "2")
+    params = {
+        "entity_kind": self.entity_kind,
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 4)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertTrue(len(results) >= 2)
+    self._assertEqualsForAllShards_splitInput(
+        ["0", "1", "2", "10", "11", "12"], None, *results)
 
-  def tesGeneratorNoModelOtherApp(self):
-    """Test DatastoreKeyInputReader when raw kind is given, not a Model path."""
-    OTHER_KIND = "blahblah"
-    OTHER_APP = "blah"
+  def testSplitInput_moreThanOneUnevenNS(self):
+    self._create_entities(range(5), {"1": 1, "3": 3}, "1")
+    self._create_entities(range(10, 13), {"11": 11}, "2")
+    params = {
+        "entity_kind": self.entity_kind,
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 4)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertTrue(len(results) >= 3)
+    self._assertEqualsForAllShards_splitInput(
+        ["0", "1", "2", "3", "4", "10", "11", "12"], None, *results)
+
+  def testSplitInput_lotsOfNS(self):
+    self._create_entities(range(3), {"1": 1}, "9")
+    self._create_entities(range(3, 6), {"4": 4}, "_")
+    self._create_entities(range(6, 9), {"7": 7}, "a")
+    params = {
+        "entity_kind": self.entity_kind,
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 3)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(3, len(results))
+    self._assertEquals_splitInput(results[0], ["0", "1", "2"])
+    self._assertEquals_splitInput(results[1], ["3", "4", "5"])
+    self._assertEquals_splitInput(results[2], ["6", "7", "8"])
+
+  def testSplitInput_withNsAndDefaultNs(self):
+    shards = 2
+    # 10 entities in the default namespace
+    empty_ns_keys = [str(k) for k in range(10)]
+    self._create_entities(empty_ns_keys,
+                          dict([(k, 1) for k in empty_ns_keys]),
+                          None)
+    # 10 entities for each of N different non-default namespaces. The number
+    # of namespaces, N, is set to be twice the cutoff for switching to sharding
+    # by namespace instead of keys.
+    non_empty_ns_keys = []
+    for ns_num in range(self.reader_cls.MAX_NAMESPACES_FOR_KEY_SHARD * 2):
+      ns_keys = ["n-%02d-k-%02d" % (ns_num, k) for k in range(10)]
+      non_empty_ns_keys.extend(ns_keys)
+      self._create_entities(ns_keys,
+                            dict([(k, 1) for k in ns_keys]),
+                            "%02d" % ns_num)
+
+    # Test a query over all namespaces
+    params = {
+        "entity_kind": self.entity_kind,
+        "namespace": None}
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params,
+        shards)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEqual(shards, len(results))
+    all_keys = empty_ns_keys + non_empty_ns_keys
+    self._assertEqualsForAllShards_splitInput(all_keys,
+                                              len(all_keys),
+                                              *results)
+
+
+class RawDatastoreInputReaderTest(DatastoreInputReaderTestCommon):
+  """RawDatastoreInputReader specific tests."""
+
+  @property
+  def reader_cls(self):
+    return input_readers.RawDatastoreInputReader
+
+  def testValidate_Filters(self):
+    """Tests validating filters parameter."""
+    params = {
+        "entity_kind": self.entity_kind,
+        "filters": [("a", "=", 1), ("b", "=", 2)],
+        }
+    new = datetime.datetime.now()
+    old = new.replace(year=new.year-1)
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "RawDatastoreInputReader",
+        params, 1)
+    self.reader_cls.validate(mapper_spec)
+
+    # Only equality filters supported.
+    params["filters"] = [["datetime_property", ">", old],
+                         ["datetime_property", "<=", new],
+                         ["a", "=", 1]]
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      self.reader_cls.validate,
+                      mapper_spec)
+
+  def testEntityKindWithDot(self):
+    self._create_entities(range(3), {"1": 1}, "", TestEntityWithDot)
+
+    params = {
+        "entity_kind": TestEntityWithDot.kind(),
+        "namespace": "",
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "RawDatastoreInputReader",
+        params, 2)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(2, len(results))
+    self._assertEqualsForAllShards_splitInput(["0", "1", "2"], None, *results)
+
+  def testRawEntityTypeFromOtherApp(self):
+    """Test reading from other app."""
+    OTHER_KIND = "bar"
+    OTHER_APP = "foo"
     apiproxy_stub_map.apiproxy.GetStub("datastore_v3").SetTrusted(True)
+    expected_keys = [str(i) for i in range(10)]
+    for k in expected_keys:
+      datastore.Put(datastore.Entity(OTHER_KIND, name=k, _app=OTHER_APP))
 
-    expected_keys = []
-    for _ in range(0, 100):
-      expected_keys.append(datastore.Put(datastore.Entity(OTHER_KIND,
-                                                          _app=OTHER_APP)))
+    params = {
+        "entity_kind": OTHER_KIND,
+        "_app": OTHER_APP,
+    }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "RawDatastoreInputReader",
+        params, 1)
+    itr = self.reader_cls.split_input(mapper_spec)[0]
+    self._assertEquals_splitInput(itr, expected_keys)
+    apiproxy_stub_map.apiproxy.GetStub("datastore_v3").SetTrusted(False)
 
-    key_start = db.Key.from_path(OTHER_KIND, 25, _app=OTHER_APP)
-    key_end = db.Key.from_path(OTHER_KIND, 50, _app=OTHER_APP)
-    krange = key_range.KeyRange(key_start=key_start, key_end=key_end,
-                                direction="ASC",
-                                include_start=False, include_end=True,
-                                _app=OTHER_APP)
 
-    query_range = input_readers.DatastoreKeyInputReader(
-        OTHER_KIND, [krange],
-        {"app": OTHER_APP, "batch_size": 50})
+class DatastoreEntityInputReaderTest(RawDatastoreInputReaderTest):
+  """DatastoreEntityInputReader tests."""
 
-    keys = []
+  @property
+  def reader_cls(self):
+    return input_readers.DatastoreEntityInputReader
 
-    for key in query_range:
-      keys.append(key)
-      self.assertEquals(
-          key_range.KeyRange(key_start=key, key_end=key_end,
-                             direction="ASC",
-                             include_start=False, include_end=True),
-          query_range._key_range)
+  def _get_keyname(self, entity):
+    # assert item is of low level datastore Entity type.
+    self.assertTrue(isinstance(entity, datastore.Entity))
+    return entity.key().name()
 
-    self.assertEquals(25, len(keys))
-    self.assertEquals(expected_keys[25:50], keys)
+
+class DatastoreKeyInputReaderTest(RawDatastoreInputReaderTest):
+  """DatastoreKeyInputReader tests."""
+
+  @property
+  def reader_cls(self):
+    return input_readers.DatastoreKeyInputReader
+
+  def _get_keyname(self, entity):
+    return entity.name()
+
+
+class DatastoreInputReaderTest(DatastoreInputReaderTestCommon):
+  """Test DatastoreInputReader."""
+
+  @property
+  def reader_cls(self):
+    return input_readers.DatastoreInputReader
+
+  @property
+  def entity_kind(self):
+    return "__main__.TestEntity"
+
+  def testValidate_EntityKindWithNoModel(self):
+    """Test validate function with no model."""
+    params = {
+        "entity_kind": "foo",
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "DatastoreInputReader",
+        params, 1)
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      self.reader_cls.validate,
+                      mapper_spec)
+
+  def testValidate_Filters(self):
+    """Tests validating filters parameter."""
+    params = {
+        "entity_kind": self.entity_kind,
+        "filters": [("a", "=", 1), ("b", "=", 2)],
+        }
+    new = datetime.datetime.now()
+    old = new.replace(year=new.year-1)
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "DatastoreInputReader",
+        params, 1)
+    self.reader_cls.validate(mapper_spec)
+
+    params["filters"] = [["a", ">", 1], ["a", "<", 2]]
+    self.reader_cls.validate(mapper_spec)
+
+    params["filters"] = [["datetime_property", ">", old],
+                         ["datetime_property", "<=", new],
+                         ["a", "=", 1]]
+    self.reader_cls.validate(mapper_spec)
+
+    params["filters"] = [["a", "=", 1]]
+    self.reader_cls.validate(mapper_spec)
+
+    # Invalid field c
+    params["filters"] = [("c", "=", 1)]
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      self.reader_cls.validate,
+                      mapper_spec)
+
+    # Expect a range.
+    params["filters"] = [("a", "<=", 1)]
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      self.reader_cls.validate,
+                      mapper_spec)
+
+    # Value should be a datetime.
+    params["filters"] = [["datetime_property", ">", 1],
+                         ["datetime_property", "<=", datetime.datetime.now()]]
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      self.reader_cls.validate,
+                      mapper_spec)
+
+    # Expect a closed range.
+    params["filters"] = [["datetime_property", ">", new],
+                         ["datetime_property", "<=", old]]
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      self.reader_cls.validate,
+                      mapper_spec)
+
+  def _set_vals(self, entities, a_vals, b_vals):
+    """Set a, b values for entities."""
+    vals = []
+    for a in a_vals:
+      for b in b_vals:
+        vals.append((a, b))
+    for e, val in zip(entities, vals):
+      e.a = val[0]
+      e.b = val[1]
+      e.put()
+
+  def testSplitInput_shardByFilters_withNs(self):
+    entities = self._create_entities(range(12), {}, "f")
+    self._set_vals(entities, list(range(6)), list(range(2)))
+    params = {
+        "entity_kind": self.entity_kind,
+        "namespace": "f",
+        "filters": [("a", ">", 0),
+                    ("a", "<=", 3),
+                    ("b", "=", 1)],
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 2)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(2, len(results))
+    self._assertEquals_splitInput(results[0], ["3", "5"])
+    self._assertEquals_splitInput(results[1], ["7"])
+
+  def testSplitInput_shardByFilters_noEntity(self):
+    params = {
+        "entity_kind": self.entity_kind,
+        "namespace": "f",
+        "filters": [("a", ">", 0), ("a", "<=", 3), ("b", "=", 1)]
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 100)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(3, len(results))
+    self._assertEquals_splitInput(results[0], [])
+    self._assertEquals_splitInput(results[1], [])
+    self._assertEquals_splitInput(results[2], [])
+
+  def testSplitInput_shardByFilters_bigShardNumber(self):
+    entities = self._create_entities(range(12), {}, "f")
+    self._set_vals(entities, list(range(6)), list(range(2)))
+    params = {
+        "entity_kind": self.entity_kind,
+        "namespace": "f",
+        "filters": [("a", ">", 0), ("a", "<=", 3), ("b", "=", 1)]
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 100)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(3, len(results))
+    self._assertEquals_splitInput(results[0], ["3"])
+    self._assertEquals_splitInput(results[1], ["5"])
+    self._assertEquals_splitInput(results[2], ["7"])
+
+  def testSplitInput_shardByFilters_lotsOfNS(self):
+    """Lots means more than 2 in test cases."""
+    entities = self._create_entities(range(12), {}, "f")
+    self._set_vals(entities, list(range(6)), list(range(2)))
+    entities = self._create_entities(range(12, 24), {}, "g")
+    self._set_vals(entities, list(range(6)), list(range(2)))
+    entities = self._create_entities(range(24, 36), {}, "h")
+    self._set_vals(entities, list(range(6)), list(range(2)))
+    entities = self._create_entities(range(36, 48), {}, "h")
+    self._set_vals(entities, [0]*6, list(range(2)))
+
+    params = {
+        "entity_kind": self.entity_kind,
+        "filters": [("a", ">", 0), ("a", "<=", 3), ("b", "=", 1)]
+        }
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        "InputReader",
+        params, 100)
+    results = self.reader_cls.split_input(mapper_spec)
+    self.assertEquals(3, len(results))
+    self._assertEquals_splitInput(results[0], ["3", "5", "7"])
+    self._assertEquals_splitInput(results[1], ["15", "17", "19"])
+    self._assertEquals_splitInput(results[2], ["27", "29", "31"])
+
+
+class DatastoreInputReaderNdbTest(DatastoreInputReaderTest):
+
+  @property
+  def entity_kind(self):
+    return "__main__.NdbTestEntity"
+
+  def _create_entities(self,
+                       keys_itr,
+                       key_to_scatter_val,
+                       ns=None,
+                       entity_model_cls=NdbTestEntity):
+    """Create ndb entities for tests.
+
+    Args:
+      keys_itr: an iterator that contains all the key names.
+        Will be casted to str.
+      key_to_scatter_val: a dict that maps key names to its scatter values.
+      ns: the namespace to create the entity at.
+      entity_model_cls: entity model class.
+
+    Returns:
+      A list of entities created.
+    """
+    set_scatter_setter(key_to_scatter_val)
+    entities = []
+    for i in keys_itr:
+      k = ndb.Key(entity_model_cls._get_kind(), str(i), namespace=ns)
+      entity = entity_model_cls(key=k)
+      entities.append(entity)
+      entity.put()
+    return entities
+
+  def _get_keyname(self, entity):
+    return entity.key.id()
 
 
 BLOBSTORE_READER_NAME = (
@@ -1475,23 +1631,6 @@ class BlobstoreZipLineInputReaderTest(unittest.TestCase):
 STARTUP_TIME_US = 1000
 
 
-class MockUnappliedQuery(datastore.Query):
-  """Mocks unapplied query in order to mimic existence of unapplied jobs."""
-
-  def __init__(self, results):
-    """Constructs unapplied query with given results."""
-    self.results = results
-
-  def Get(self, limit, config):
-    """Fetches query results."""
-    if limit != input_readers.ConsistentKeyReader._BATCH_SIZE:
-      raise Exception("Unexpected limit %s" % limit)
-    if config.deadline != 270:
-      raise Exception("Unexpected deadline %s" % config.deadline)
-
-    return self.results
-
-
 class RandomStringInputReaderTest(unittest.TestCase):
   """Tests for RandomStringInputReader."""
 
@@ -1580,236 +1719,6 @@ class RandomStringInputReaderTest(unittest.TestCase):
     self.assertEquals({"count": 10, "string_length": 9}, reader_in_json)
     input_readers.RandomStringInputReader.from_json(reader_in_json)
     self.assertEquals(10, input_reader._count)
-
-
-class ConsistentKeyReaderTest(unittest.TestCase):
-  """Tests for the ConsistentKeyReader."""
-
-  MAPREDUCE_READER_SPEC = ("%s.%s" %
-                           (input_readers.ConsistentKeyReader.__module__,
-                            input_readers.ConsistentKeyReader.__name__))
-
-  def setUp(self):
-    """Sets up the test harness."""
-    unittest.TestCase.setUp(self)
-    self.app_id = "myapp"
-    self.kind_id = "somekind"
-
-    self.mapper_params = {
-        "entity_kind": self.kind_id,
-        "start_time_us": STARTUP_TIME_US,
-        "enable_quota": False}
-    self.mapper_spec = model.MapperSpec.from_json({
-        "mapper_handler_spec": "FooHandler",
-        "mapper_input_reader": ConsistentKeyReaderTest.MAPREDUCE_READER_SPEC,
-        "mapper_params": self.mapper_params,
-        "mapper_shard_count": 10})
-
-    self.reader = input_readers.ConsistentKeyReader(
-        self.kind_id,
-        key_ranges=[key_range.KeyRange()])
-    self.reader.start_time_us = STARTUP_TIME_US
-    os.environ["APPLICATION_ID"] = self.app_id
-
-    self.datastore = datastore_file_stub.DatastoreFileStub(
-        self.app_id, "/dev/null", "/dev/null")
-
-    apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
-    apiproxy_stub_map.apiproxy.RegisterStub("datastore_v3", self.datastore)
-
-    self.mox = mox.Mox()
-
-  def tearDown(self):
-    """Verifies mox expectations."""
-    try:
-      self.mox.VerifyAll()
-    finally:
-      self.mox.UnsetStubs()
-
-  def testSplitInputNoData(self):
-    """Splits empty input among several shards."""
-    readers = input_readers.ConsistentKeyReader.split_input(self.mapper_spec)
-    self.assertEquals(1, len(readers))
-
-    r = readers[0]
-    self.assertEquals(self.kind_id, r._entity_kind)
-    self.assertEquals(STARTUP_TIME_US, r.start_time_us)
-    self.assertEquals(namespace_range.NamespaceRange(), r._ns_range)
-
-  def testSplitInputNotEnoughData(self):
-    """Tests mapper_shard_count > number of entities."""
-    datastore.Put(datastore.Entity(self.kind_id))
-    datastore.Put(datastore.Entity(self.kind_id))
-    namespace_manager.set_namespace('a')
-    datastore.Put(datastore.Entity(self.kind_id))
-    namespace_manager.set_namespace(None)
-
-    readers = input_readers.ConsistentKeyReader.split_input(self.mapper_spec)
-    self.assertEquals(10, len(readers))
-
-    for r in readers:
-      self.assertEquals(self.kind_id, r._entity_kind)
-      self.assertEquals(STARTUP_TIME_US, r.start_time_us)
-
-    self.assertEqual([key_range.KeyRange(key_start=None,
-                                         key_end=None,
-                                         direction='ASC',
-                                         include_start=False,
-                                         include_end=False,
-                                         namespace='a'),
-                      key_range.KeyRange(key_start=None,
-                                         key_end=key(2, kind=self.kind_id),
-                                         direction='ASC',
-                                         include_start=False,
-                                         include_end=False,
-                                         namespace='')],
-                     readers[0]._key_ranges)
-
-    self.assertEqual([None,
-                      key_range.KeyRange(key_start=key(2, kind=self.kind_id),
-                                         key_end=None,
-                                         direction='ASC',
-                                         include_start=True,
-                                         include_end=False,
-                                         namespace='')],
-                     readers[1]._key_ranges)
-
-    for i in range(2, len(readers)):
-      self.assertEquals([None, None],
-                        readers[i]._key_ranges,
-                        '[None] != readers[%d]._key_ranges (%s)' %
-                        (i, readers[i]._key_ranges))
-
-  def testSplitInput(self):
-    """Splits input among several shards."""
-    for _ in range(100):
-      datastore.Put(datastore.Entity(self.kind_id))
-    readers = input_readers.ConsistentKeyReader.split_input(self.mapper_spec)
-    self.assertEquals(10, len(readers))
-
-    for r in readers:
-      self.assertEquals(self.kind_id, r._entity_kind)
-      self.assertEquals(STARTUP_TIME_US, r.start_time_us)
-
-    # The end ranges should be half openned.
-    self.assertEquals(None, readers[0]._key_ranges[0].key_start)
-    self.assertEquals(None, readers[-1]._key_ranges[0].key_end)
-
-  def testReaderGeneratorSimple(self):
-    """Tests reader generator when there are no unapplied jobs."""
-    k1 = datastore.Put(datastore.Entity(self.kind_id))
-    k2 = datastore.Put(datastore.Entity(self.kind_id))
-
-    keys = list(self.reader)
-    self.assertEquals([k1, k2], keys)
-
-  def testReaderGeneratorSimpleWithEmptyDatastore(self):
-    """Tests reader generator when there are no unapplied jobs or entities."""
-    keys = list(self.reader)
-    self.assertEquals([], keys)
-
-  def testReaderGeneratorUnappliedJobsWithKeyRanges(self):
-    """Tests reader generator when there are some unapplied jobs."""
-    k1 = datastore.Put(datastore.Entity(self.kind_id))
-    k2 = datastore.Put(datastore.Entity(self.kind_id))
-    k3 = datastore.Put(datastore.Entity(self.kind_id))
-
-    dummy_k1 = db.Key.from_path(
-        *(k1.to_path() + [input_readers.ConsistentKeyReader.DUMMY_KIND,
-                          input_readers.ConsistentKeyReader.DUMMY_ID]))
-    dummy_k2 = db.Key.from_path(
-        *(k2.to_path() + [input_readers.ConsistentKeyReader.DUMMY_KIND,
-                          input_readers.ConsistentKeyReader.DUMMY_ID]))
-    dummy_k3 = db.Key.from_path(
-        *(k3.to_path() + [input_readers.ConsistentKeyReader.DUMMY_KIND,
-                          input_readers.ConsistentKeyReader.DUMMY_ID]))
-
-    self.mox.StubOutWithMock(self.reader, "_make_unapplied_query")
-    self.mox.StubOutWithMock(db, "get")
-
-    # Pretend that batch_size = 2.
-    self.reader._make_unapplied_query(key_range.KeyRange()).AndReturn(
-        MockUnappliedQuery([k1, k2]))
-    db.get([dummy_k1, dummy_k2], config=mox.IgnoreArg())
-    self.reader._make_unapplied_query(
-        key_range.KeyRange(key_start=k2, include_start=False)).AndReturn(
-            MockUnappliedQuery([k3]))
-    db.get([dummy_k3], config=mox.IgnoreArg())  # Entity was deleted.
-    self.reader._make_unapplied_query(
-        key_range.KeyRange(key_start=k3, include_start=False)).AndReturn(
-            MockUnappliedQuery([]))
-
-    self.mox.ReplayAll()
-
-    keys = list(self.reader)
-    self.assertEquals([k1, k2, k3], keys)
-
-  def testReaderGeneratorWithNamespaceRange(self):
-    """Tests reader generator with namespaces but no unapplied jobs."""
-    self.reader = input_readers.ConsistentKeyReader(
-        self.kind_id,
-        ns_range=namespace_range.NamespaceRange("a", "z"))
-    self.reader.start_time_us = STARTUP_TIME_US
-
-    expected_objects = set()
-    for ns in ["b", "g", "happy", "helloworld", "r", "s", "t"]:
-      namespace_manager.set_namespace(ns)
-      expected_objects.add(input_readers.ALLOW_CHECKPOINT)
-      expected_objects.add(datastore.Put(datastore.Entity(self.kind_id)))
-    namespace_manager.set_namespace(None)
-
-    self.mox.ReplayAll()
-    keys = set(self.reader)
-    self.assertEquals(expected_objects, keys)
-
-  def testReaderGeneratorUnappliedJobsWithNamespaceRange(self):
-    """Tests reader generator when there are some unapplied jobs."""
-    self.reader = input_readers.ConsistentKeyReader(
-        self.kind_id,
-        ns_range=namespace_range.NamespaceRange("a", "z"))
-    self.reader.start_time_us = STARTUP_TIME_US
-
-    expected_objects = set()
-    def AddUnappliedEntities(*args):
-      namespace_manager.set_namespace("a")
-      expected_objects.add(input_readers.ALLOW_CHECKPOINT)
-      expected_objects.add(datastore.Put(
-        datastore.Entity(self.kind_id, name="a")))
-
-      namespace_manager.set_namespace("d")
-      expected_objects.add(input_readers.ALLOW_CHECKPOINT)
-      expected_objects.add(datastore.Put(
-        datastore.Entity(self.kind_id, name="d")))
-
-      namespace_manager.set_namespace("z")
-      expected_objects.add(input_readers.ALLOW_CHECKPOINT)
-      expected_objects.add(datastore.Put
-          (datastore.Entity(self.kind_id, name="z")))
-      namespace_manager.set_namespace(None)
-
-    for c in ["b", "g", "t"]:
-      namespace_manager.set_namespace(c)
-      expected_objects.add(input_readers.ALLOW_CHECKPOINT)
-      expected_objects.add(datastore.Put(datastore.Entity(self.kind_id)))
-    namespace_manager.set_namespace(None)
-
-    self.mox.StubOutWithMock(
-        input_readers.ConsistentKeyReader,
-        "_get_unapplied_jobs_accross_namespaces")
-
-    # Applying jobs first.
-    input_readers.ConsistentKeyReader._get_unapplied_jobs_accross_namespaces(
-        "a", "z", None).WithSideEffects(
-            AddUnappliedEntities).AndReturn([
-                db.Key.from_path(self.kind_id, "a", namespace="a"),
-                db.Key.from_path(self.kind_id, "d", namespace="d"),
-                db.Key.from_path(self.kind_id, "z", namespace="z")])
-    input_readers.ConsistentKeyReader._get_unapplied_jobs_accross_namespaces(
-        "a", "z", None).AndReturn([])
-
-    self.mox.ReplayAll()
-    keys = set(self.reader)
-    self.assertEquals(expected_objects, keys)
 
 
 class NamespaceInputReaderTest(unittest.TestCase):
@@ -2146,8 +2055,8 @@ class LogInputReaderTest(unittest.TestCase):
                       input_readers.LogInputReader.validate,
                       self.mapper_spec)
 
-  def testValidateNoVersionIdsParam(self):
-    """Test validate without version_ids param."""
+  def testValidateNoVersionIdsOrModuleVersionsParam(self):
+    """Test validate without version_ids or module_versions param."""
     del self.mapper_spec.params["input_reader"]["version_ids"]
     self.assertRaises(errors.BadReaderParamsError,
                       input_readers.LogInputReader.validate,
@@ -2157,6 +2066,19 @@ class LogInputReaderTest(unittest.TestCase):
     """Test validate with a malformed version_ids param."""
     # This is really testing the validation that logservice.fetch() itself does.
     self.mapper_spec.params["input_reader"]["version_ids"] = "1"
+    self.assertRaises(errors.BadReaderParamsError,
+                      input_readers.LogInputReader.validate,
+                      self.mapper_spec)
+
+  def testValidateModuleVersionsParam(self):
+    """Test validate module_versions param but without version_ids param."""
+    del self.mapper_spec.params["input_reader"]["version_ids"]
+    self.mapper_spec.params["input_reader"]["module_versions"] = [("m", "v")]
+    input_readers.LogInputReader.validate(self.mapper_spec)
+
+  def testValidateNoVersionIdsAndModuleVersionsParam(self):
+    """Test validate without version_ids and module_versions param."""
+    self.mapper_spec.params["input_reader"]["module_versions"] = [("m", "v")]
     self.assertRaises(errors.BadReaderParamsError,
                       input_readers.LogInputReader.validate,
                       self.mapper_spec)
@@ -2217,10 +2139,16 @@ class LogInputReaderTest(unittest.TestCase):
     """Simplistic test for stringification of LogInputReader."""
     readers = input_readers.LogInputReader.split_input(self.mapper_spec)
     self.assertEqual(
-        "LogInputReader(include_incomplete=True, minimum_log_level=1, "
-        "start_time=96, prototype_request='app_id: \"app1\"\n', "
-        "version_ids=['1'], end_time=128, offset='%s', "
-        "include_app_logs=True)" % self.offset, str(readers[-1]))
+        "LogInputReader"
+        "(end_time=128,"
+        " include_app_logs=True,"
+        " include_incomplete=True,"
+        " minimum_log_level=1,"
+        " offset=\'%s',"
+        " prototype_request=\'app_id: \"app1\"\n\',"
+        " start_time=96,"
+        " version_ids=[\'1\']"
+        ")" % self.offset, str(readers[-1]))
 
   def testEvenLogSplit(self):
     readers = input_readers.LogInputReader.split_input(self.mapper_spec)
@@ -2287,31 +2215,26 @@ class LogInputReaderTest(unittest.TestCase):
     """Create a set of test log records."""
     # Prepare the data.
     apiproxy_stub_map.apiproxy = apiproxy_stub_map.APIProxyStubMap()
-    apiproxy_stub_map.apiproxy.RegisterStub(
-        "datastore_v3",
-        datastore_file_stub.DatastoreFileStub(self.app_id, None))
-    apiproxy_stub_map.apiproxy.RegisterStub(
-        "logservice", logservice_stub.LogServiceStub(persist=False))
+    stub = logservice_stub.LogServiceStub()
+    apiproxy_stub_map.apiproxy.RegisterStub("logservice", stub)
 
     # Write test data.
-    writer = logservice_stub.RequestLogWriter(persist=True)
     expected = []
     for i in xrange(count):
-      os.environ["REQUEST_ID_HASH"] = str(i)  # Required by logservice_stub.
-      writer.write_request_info(ip="127.0.0.1",
-                                app_id=self.app_id,
-                                version_id=self.version_id,
-                                nickname="test@example.com",
-                                user_agent="Chrome/15.0.874.106",
-                                host="127.0.0.1:8080",
-                                start_time=i * 1000000,
-                                end_time=i * 1000000 + 500)
-      writer.write("GET", "/", 200, 0, "HTTP/1.1")
+      stub.start_request(request_id=i,
+                         user_request_id="",
+                         ip="127.0.0.1",
+                         app_id=self.app_id,
+                         version_id=self.version_id,
+                         nickname="test@example.com",
+                         user_agent="Chrome/15.0.874.106",
+                         host="127.0.0.1:8080",
+                         method="GET",
+                         resource="/",
+                         http_version="HTTP/1.1",
+                         start_time=i * 1000000)
+      stub.end_request(i, 200, 0, end_time=i * 1000000 + 500)
       expected.append({"start_time": i, "end_time": i + .0005})
-    # NOTE(user): write_request_info() calls set_namespace(), and has a long
-    # comment on why it can't restore the previous namespace, but I don't
-    # understand it.  Manually resetting here to avoid test state leakage.
-    namespace_manager.set_namespace(None)
     expected.reverse()  # Results come back in most-recent-first order.
 
     return expected
@@ -2376,6 +2299,810 @@ class LogInputReaderTest(unittest.TestCase):
                                             offset=log.offset)
       self.verifyLogs(expected, fetched_logs + list(reader))
 
+
+class ReducerReaderTest(testutil.HandlerTestBase):
+  """Tests for _ReducerReader."""
+
+  def testMultipleRequests(self):
+    """Tests restoring the reader state across multiple requests."""
+    input_file = files.blobstore.create()
+
+    # Create a file with two records.
+    with files.open(input_file, "a") as f:
+      with records.RecordsWriter(f) as w:
+        proto = file_service_pb.KeyValues()
+        proto.set_key("key2")
+        proto.value_list().extend(["a", "b"])
+        proto.set_partial(True)
+        w.write(proto.Encode())
+
+        proto = file_service_pb.KeyValues()
+        proto.set_key("key2")
+        proto.value_list().extend(["c", "d"])
+        w.write(proto.Encode())
+
+    files.finalize(input_file)
+    input_file = files.blobstore.get_file_name(
+        files.blobstore.get_blob_key(input_file))
+
+    # Now read the records in two attempts, serializing and recreating the
+    # input reader as if it's a separate request.
+    reader = input_readers._ReducerReader([input_file], 0)
+    it = iter(reader)
+    self.assertEquals(input_readers.ALLOW_CHECKPOINT, it.next())
+
+    reader_state = reader.to_json()
+    other_reader = input_readers._ReducerReader.from_json(reader_state)
+    it = iter(reader)
+    self.assertEquals(("key2", ["a", "b", "c", "d"]), it.next())
+
+  def testSingleRequest(self):
+    """Tests when a key can be handled during a single request."""
+    input_file = files.blobstore.create()
+
+    with files.open(input_file, "a") as f:
+      with records.RecordsWriter(f) as w:
+        # First record is full
+        proto = file_service_pb.KeyValues()
+        proto.set_key("key1")
+        proto.value_list().extend(["a", "b"])
+        w.write(proto.Encode())
+        # Second record is partial
+        proto = file_service_pb.KeyValues()
+        proto.set_key("key2")
+        proto.value_list().extend(["a", "b"])
+        proto.set_partial(True)
+        w.write(proto.Encode())
+        proto = file_service_pb.KeyValues()
+        proto.set_key("key2")
+        proto.value_list().extend(["c", "d"])
+        w.write(proto.Encode())
+
+    files.finalize(input_file)
+    input_file = files.blobstore.get_file_name(
+        files.blobstore.get_blob_key(input_file))
+
+    reader = input_readers._ReducerReader([input_file], 0)
+    self.assertEquals(
+        [("key1", ["a", "b"]),
+         input_readers.ALLOW_CHECKPOINT,
+         ("key2", ["a", "b", "c", "d"])],
+        list(reader))
+
+    # now test state serialization
+    reader = input_readers._ReducerReader([input_file], 0)
+    i = reader.__iter__()
+    self.assertEquals(
+        {"position": 0,
+         "current_values": "Ti4=",
+         "current_key": "Ti4=",
+         "filenames": [input_file]},
+        reader.to_json())
+
+    self.assertEquals(("key1", ["a", "b"]), i.next())
+    self.assertEquals(
+        {"position": 19,
+         "current_values": "Ti4=",
+         "current_key": "Ti4=",
+         "filenames": [input_file]},
+        reader.to_json())
+
+    self.assertEquals(input_readers.ALLOW_CHECKPOINT, i.next())
+    self.assertEquals(
+        {"position": 40,
+         "current_values": "KGxwMApTJ2EnCnAxCmFTJ2InCnAyCmEu",
+         "current_key": "UydrZXkyJwpwMAou",
+         "filenames": [input_file]},
+        reader.to_json())
+
+    self.assertEquals(("key2", ["a", "b", "c", "d"]), i.next())
+    self.assertEquals(
+        {"position": 59,
+         "current_values": "Ti4=",
+         "current_key": "Ti4=",
+         "filenames": [input_file]},
+        reader.to_json())
+
+    try:
+      i.next()
+      self.fail("Exception expected")
+    except StopIteration:
+      # expected
+      pass
+
+    # now do test deserialization at every moment.
+    reader = input_readers._ReducerReader([input_file], 0)
+    i = reader.__iter__()
+    reader = input_readers._ReducerReader.from_json(reader.to_json())
+
+    self.assertEquals(("key1", ["a", "b"]), i.next())
+    reader = input_readers._ReducerReader.from_json(reader.to_json())
+
+    self.assertEquals(input_readers.ALLOW_CHECKPOINT, i.next())
+    reader = input_readers._ReducerReader.from_json(reader.to_json())
+
+    self.assertEquals(("key2", ["a", "b", "c", "d"]), i.next())
+    reader = input_readers._ReducerReader.from_json(reader.to_json())
+
+    try:
+      i.next()
+      self.fail("Exception expected")
+    except StopIteration:
+      # expected
+      pass
+
+
+class FileInputReaderTest(unittest.TestCase):
+  """Tests for FileInputReader."""
+
+  def setUp(self):
+    unittest.TestCase.setUp(self)
+
+    self._files_open = files.file.open
+    self._files_stat = files.file.stat
+    files.file.open = open
+    files.file.stat = os.stat
+    self.__created_files = []
+
+    self.mox = mox.Mox()
+
+  def tearDown(self):
+    self.mox.UnsetStubs()
+    self.mox.VerifyAll()
+    files.file.open = self._files_open
+    files.file.stat = self._files_stat
+    for filename in self.__created_files:
+      os.remove(filename)
+
+  def createTmp(self):
+    _, path = tempfile.mkstemp()
+    self.__created_files.append(path)
+    return path
+
+  def createReader(self, filenames, format_string):
+    root = file_format_root.split(filenames, format_string, 1)[0]
+    return input_readers.FileInputReader(root)
+
+  def assertEqualsAfterJson(self, expected, input_reader):
+    contents = []
+
+    while True:
+      try:
+        contents.append(input_reader.next())
+        input_reader = input_readers.FileInputReader.from_json(
+            input_reader.to_json())
+      except StopIteration:
+        break
+
+    self.assertEquals(expected, contents)
+
+  def testIter(self):
+    filenames = []
+    for _ in range(3):
+      path = self.createTmp()
+      filenames.append(path)
+      f = open(path, "w")
+      f.write("l1\nl2\nl3\n")
+      f.close()
+
+    input_reader = self.createReader(filenames, "lines")
+    self.assertEqualsAfterJson(["l1\n", "l2\n", "l3\n"]*3, input_reader)
+
+  def testNoData(self):
+    """Test no data for input splitting."""
+    mapper_spec = model.MapperSpec(
+        "test_handler",
+        input_readers.__name__ + ".FileInputReader",
+        {
+            "input_reader": {
+                "format": "lines",
+                "files": []
+            }
+        },
+        3)
+    mr_input_readers = input_readers.FileInputReader.split_input(mapper_spec)
+    self.assertFalse(mr_input_readers)
+
+  def setUpForEndToEndTest(self, num_shards):
+    """Setup mox for end to end test.
+
+    Create 100 zip files, each of which has 10 member files.
+
+    Args:
+      num_shards: number of shards from mapper_spec.
+
+    Returns:
+      mapper_spec: a mapper spec model with attributes set accordingly.
+    """
+
+    def _random_filename():
+      return "".join(random.choice(string.ascii_letters) for _ in range(10))
+
+    tmp_filenames = []
+    for i in range(100):
+      path = self.createTmp()
+      tmp_filenames.append(path)
+      archive = zipfile.ZipFile(path, "w")
+      for i in range(10):
+        archive.writestr(_random_filename(), (string.ascii_letters + "\n")*100)
+      archive.close()
+    input_filenames = ["/gs/bucket/" + name for name in tmp_filenames]
+
+    self.mox.StubOutWithMock(files.gs, "parseGlob")
+    # Once for validate.
+    for i, input_filename in enumerate(input_filenames):
+      files.gs.parseGlob(input_filename).AndReturn(tmp_filenames[i])
+
+    # Once for split input.
+    for i, input_filename in enumerate(input_filenames):
+      files.gs.parseGlob(input_filename).AndReturn(tmp_filenames[i])
+
+    self.mox.ReplayAll()
+
+    return model.MapperSpec(
+        "test_handler",
+        input_readers.__name__ + ".FileInputReader",
+        {
+            "input_reader": {
+                "format": "zip[lines]",
+                "files": input_filenames
+            }
+        },
+        num_shards)
+
+  def runEndToEndTest(self, num_shards):
+    """Create FileInputReaders and run them through their phases.
+
+    FileInputReader has these phases: validate, split input, __init__, __iter__,
+    to_json, from_json, __iter__.
+
+    Args:
+      num_shards: number of shards to run mappers.
+    """
+    mapper_spec = self.setUpForEndToEndTest(num_shards)
+    input_readers.FileInputReader.validate(mapper_spec)
+    mr_input_readers = input_readers.FileInputReader.split_input(mapper_spec)
+
+    # Check we can read all inputs.
+    counter = 0
+    logging.warning("FileInputReader shards %d readers %d",
+                    num_shards, len(mr_input_readers))
+    for reader in mr_input_readers:
+      for line in reader:
+        self.assertEquals(string.ascii_letters + "\n", line)
+        counter += 1
+        # This single line will increase test time by 100 magnitude.
+        # The reason is that all the cached zipfiles have to be reread.
+        # reader = input_readers.FileInputReader.from_json(reader.to_json())
+    self.assertEquals(100*10*100, counter)
+
+  def testEndToEnd1(self):
+    self.runEndToEndTest(1)
+
+  def testEndToEnd3(self):
+    self.runEndToEndTest(3)
+
+  def testEndToEnd33(self):
+    self.runEndToEndTest(33)
+
+  def testEndToEnd66(self):
+    self.runEndToEndTest(66)
+
+  def testEndToEnd100(self):
+    self.runEndToEndTest(100)
+
+  def testEndToEnd1000(self):
+    self.runEndToEndTest(1000)
+
+  def testValidateMissingFiles(self):
+    params = {"format": "zip"}
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        input_readers.__name__ + ".FileInputReader",
+        params,
+        1)
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+  def testValidateInvalidFiles(self):
+    params = {"files": None}
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        input_readers.__name__ + ".FileInputReader",
+        params,
+        1)
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+    mapper_spec.params = {"files": "/gs/bucket/file", "format": "line"}
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+    mapper_spec.params = {"files": ["/gs/bucket/file",
+                                    "/typoe/bucket/file"],
+                          "format": "line"}
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+  def testValidateMissingFormats(self):
+    params = {"files": ["/gs/bucket1/file1"]}
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        input_readers.__name__ + ".FileInputReader",
+        params,
+        1)
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+  def testValidateInvalidFormats(self):
+    params = {"format": 1,
+              "files": ["/gs/bucket/file"]}
+    mapper_spec = model.MapperSpec(
+        "FooHandler",
+        input_readers.__name__ + ".FileInputReader",
+        params,
+        1)
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+    mapper_spec.params["format"] = "foo"
+    self.assertRaises(input_readers.BadReaderParamsError,
+                      input_readers.FileInputReader.validate,
+                      mapper_spec)
+
+
+class GoogleCloudStorageInputTestBase(testutil.CloudStorageTestBase):
+  """Base class for running input tests with Google Cloud Storage.
+
+  Subclasses must define READER_NAME and may redefine NUM_SHARDS.
+  """
+
+  # Defaults
+  NUM_SHARDS = 10
+
+  def create_mapper_spec(self, num_shards=None, input_params=None):
+    """Create a Mapper specification using the GoogleCloudStorageInputReader.
+
+    The specification generated uses a dummy handler and by default the
+    number of shards is 10.
+
+    Args:
+      num_shards: optionally specify the number of shards.
+      input_params: parameters for the input reader.
+
+    Returns:
+      a model.MapperSpec with default settings and specified input_params.
+    """
+    mapper_spec = model.MapperSpec(
+        "DummyHandler",
+        self.READER_NAME,
+        {"input_reader": input_params or {}},
+        num_shards or self.NUM_SHARDS)
+    return mapper_spec
+
+  def create_test_file(self, filename, content):
+    """Create a test file with minimal content.
+
+    Args:
+      filename: the name of the file in the form "/bucket/object".
+      content: the content to put in the file or if None a dummy string
+        containing the filename will be used.
+    """
+    test_file = cloudstorage.open(filename, mode="w")
+    test_file.write(content)
+    test_file.close()
+
+
+class GoogleCloudStorageInputReaderWithDelimiterTest(
+    GoogleCloudStorageInputTestBase):
+  """Tests for GoogleCloudStorageInputReader."""
+
+  READER_CLS = input_readers._GoogleCloudStorageInputReader
+  READER_NAME = input_readers.__name__ + "." + READER_CLS.__name__
+
+  def setUp(self):
+    super(GoogleCloudStorageInputReaderWithDelimiterTest, self).setUp()
+
+    # create some test content
+    self.test_bucket = "testing"
+    self.test_num_files = 20
+    self.test_filenames = []
+    for file_num in range(self.test_num_files):
+      filename = "/%s/file-%03d" % (self.test_bucket, file_num)
+      self.test_filenames.append(filename)
+      self.create_test_file(filename, "foo")
+
+    # Set up more directories for testing.
+    self.file_per_dir = 2
+    self.dirs = 20
+    self.filenames_in_first_10_dirs = []
+    for d in range(self.dirs):
+      for file_num in range(self.file_per_dir):
+        filename = "/%s/dir-%02d/file-%03d" % (self.test_bucket, d, file_num)
+        if d < 10:
+          self.filenames_in_first_10_dirs.append(filename)
+        self.create_test_file(filename, "foo")
+
+  def testValidate_InvalidDelimiter(self):
+    self.assertRaises(
+        errors.BadReaderParamsError,
+        self.READER_CLS.validate,
+        self.create_mapper_spec(input_params={"bucket_name": self.test_bucket,
+                                              "delimiter": 1,
+                                              "objects": ["file"]}))
+
+  def testSerialization(self):
+    # Grab all files in the first 10 directories and all other files.
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["dir-0*", "file*"],
+                                              "delimiter": "/"}))
+    self.assertEqual(1, len(readers))
+    reader = readers[0]
+    self.assertEqual(10 + self.test_num_files, len(reader._filenames))
+    result_filenames = []
+    while True:
+      # Read one file and immediately serialize.
+      reader = self.READER_CLS.from_json_str(reader.to_json_str())
+      try:
+        result_filenames.append(reader.next().name)
+      except StopIteration:
+        break
+    self.assertEqual(self.file_per_dir * 10 + self.test_num_files,
+                     len(result_filenames))
+    self.assertEqual(self.filenames_in_first_10_dirs + self.test_filenames,
+                     result_filenames)
+
+  def testSplit(self):
+    # Grab all files in the first 10 directories.
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["dir-0*"],
+                                              "delimiter": "/"}))
+    self.assertEqual(1, len(readers))
+    reader = readers[0]
+    self.assertEqual(10, len(reader._filenames))
+    result_filenames = [f.name for f in reader]
+    self.assertEqual(self.file_per_dir * 10, len(result_filenames))
+    self.assertEqual(self.filenames_in_first_10_dirs, result_filenames)
+
+    # Grab all files.
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["*"],
+                                              "delimiter": "/"}))
+    self.assertEqual(1, len(readers))
+    reader = readers[0]
+    self.assertEqual(self.dirs + self.test_num_files, len(reader._filenames))
+    self.assertEqual(self.file_per_dir * self.dirs + self.test_num_files,
+                     len([f for f in reader]))
+
+
+class GoogleCloudStorageInputReaderTest(GoogleCloudStorageInputTestBase):
+  """Tests for GoogleCloudStorageInputReader."""
+
+  READER_CLS = input_readers._GoogleCloudStorageInputReader
+  READER_NAME = input_readers.__name__ + "." + READER_CLS.__name__
+
+  def setUp(self):
+    super(GoogleCloudStorageInputReaderTest, self).setUp()
+
+    # create test content
+    self.test_bucket = "testing"
+    self.test_content = []
+    self.test_num_files = 20
+    self.test_filenames = []
+    for file_num in range(self.test_num_files):
+      content = "Dummy Content %03d" % file_num
+      self.test_content.append(content)
+      filename = "/%s/file-%03d" % (self.test_bucket, file_num)
+      self.test_filenames.append(filename)
+      self.create_test_file(filename, content)
+
+  def testValidate_NoParams(self):
+    self.assertRaises(
+        errors.BadReaderParamsError,
+        self.READER_CLS.validate,
+        self.create_mapper_spec())
+
+  def testValidate_NoBucket(self):
+    self.assertRaises(
+        errors.BadReaderParamsError,
+        self.READER_CLS.validate,
+        self.create_mapper_spec(input_params={"objects": ["1", "2", "3"]}))
+
+  def testValidate_NoObjects(self):
+    self.assertRaises(
+        errors.BadReaderParamsError,
+        self.READER_CLS.validate,
+        self.create_mapper_spec(input_params={"bucket_name": self.test_bucket}))
+
+  def testValidate_NonList(self):
+    self.assertRaises(
+        errors.BadReaderParamsError,
+        self.READER_CLS.validate,
+        self.create_mapper_spec(input_params={"bucket_name": self.test_bucket,
+                                              "objects": "1"}))
+
+  def testValidate_SingleObject(self):
+    # expect no errors are raised
+    self.READER_CLS.validate(
+        self.create_mapper_spec(input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["1"]}))
+
+  def testValidate_ObjectList(self):
+    # expect no errors are raised
+    self.READER_CLS.validate(
+        self.create_mapper_spec(input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["1", "2", "3"]}))
+
+  def testValidate_ObjectListNonString(self):
+    self.assertRaises(
+        errors.BadReaderParamsError,
+        self.READER_CLS.validate,
+        self.create_mapper_spec(input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["1", ["2", "3"]]}))
+
+  def testSplit_NoObjectSingleShard(self):
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": []}))
+    self.assertFalse(readers)
+
+  def testSplit_SingleObjectSingleShard(self):
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["1"]}))
+    self.assertEqual(1, len(readers))
+    self.assertEqual(1, len(readers[0]._filenames))
+
+  def testSplit_SingleObjectManyShards(self):
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=10,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["1"]}))
+    self.assertEqual(1, len(readers))
+    self.assertEqual(1, len(readers[0]._filenames))
+
+  def testSplit_ManyObjectEvenlySplitManyShards(self):
+    num_shards = 10
+    files_per_shard = 3
+    filenames = ["f-%d" % f for f in range(num_shards * files_per_shard)]
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=num_shards,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": filenames}))
+    self.assertEqual(num_shards, len(readers))
+    for reader in readers:
+      self.assertEqual(files_per_shard, len(reader._filenames))
+
+  def testSplit_ManyObjectUnevenlySplitManyShards(self):
+    num_shards = 10
+    total_files = int(10 * 2.33)
+    filenames = ["f-%d" % f for f in range(total_files)]
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=num_shards,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": filenames}))
+    self.assertEqual(num_shards, len(readers))
+    found_files = 0
+    for reader in readers:
+      shard_num_files = len(reader._filenames)
+      found_files += shard_num_files
+      # ensure per-shard distribution is even
+      min_files = math.floor(total_files / num_shards)
+      max_files = min_files + 1
+      self.assertTrue(min_files <= shard_num_files,
+                      msg="Too few files (%d > %d) in reader: %s" %
+                      (min_files, shard_num_files, reader))
+      self.assertTrue(max_files >= shard_num_files,
+                      msg="Too many files (%d < %d) in reader: %s" %
+                      (max_files, shard_num_files, reader))
+    self.assertEqual(total_files, found_files)
+
+  def testSplit_Wildcard(self):
+    # test prefix matching all files
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["file-*"]}))
+    self.assertEqual(1, len(readers))
+    self.assertEqual(self.test_num_files, len(readers[0]._filenames))
+
+    # test prefix the first 10 (those with 00 prefix)
+    self.assertTrue(self.test_num_files > 10,
+                    msg="More than 10 files required for testing")
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["file-00*"]}))
+    self.assertEqual(1, len(readers))
+    self.assertEqual(10, len(readers[0]._filenames))
+
+    # test prefix matching no files
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["badprefix*"]}))
+    self.assertEqual(0, len(readers))
+
+  def testNext(self):
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["file-*"]}))
+    self.assertEqual(1, len(readers))
+    reader_files = list(readers[0])
+    self.assertEqual(self.test_num_files, len(reader_files))
+    found_content = []
+    for reader_file in reader_files:
+      found_content.append(reader_file.read())
+    self.assertEqual(len(self.test_content), len(found_content))
+    for content in self.test_content:
+      self.assertTrue(content in found_content)
+
+  def testNextWithMissingFiles(self):
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["file-*"]}))
+    self.assertEqual(1, len(readers))
+    # Remove the first and second to last files.
+    cloudstorage.delete(self.test_filenames[0])
+    cloudstorage.delete(self.test_filenames[-2])
+    del self.test_filenames[0]
+    del self.test_filenames[-2]
+
+    reader_files = list(readers[0])
+    self.assertEqual(len(self.test_filenames), len(reader_files))
+    self.assertEqual(self.test_filenames, [f.name for f in reader_files])
+
+  def testSerialization(self):
+    readers = self.READER_CLS.split_input(
+        self.create_mapper_spec(num_shards=1,
+                                input_params={"bucket_name": self.test_bucket,
+                                              "objects": ["file-*"]}))
+    self.assertEqual(1, len(readers))
+    # serialize/deserialize unused reader
+    reader = self.READER_CLS.from_json(readers[0].to_json())
+
+    found_content = []
+    for _ in range(self.test_num_files):
+      reader_file = reader.next()
+      found_content.append(reader_file.read())
+      # serialize/deserialize after each file is read
+      reader = self.READER_CLS.from_json(reader.to_json())
+    self.assertEqual(len(self.test_content), len(found_content))
+    for content in self.test_content:
+      self.assertTrue(content in found_content)
+
+    # verify a reader at EOF still raises EOF after serialization
+    self.assertRaises(StopIteration, reader.next)
+
+
+class GoogleCloudStorageRecordInputReaderTest(GoogleCloudStorageInputTestBase):
+  """Tests for GoogleCloudStorageInputReader."""
+
+  READER_CLS = input_readers._GoogleCloudStorageRecordInputReader
+  READER_NAME = input_readers.__name__ + "." + READER_CLS.__name__
+  TEST_BUCKET = "testing"
+
+  def create_test_file(self, filename, content):
+    """Create a test LevelDB file with a RecordWriter.
+
+    Args:
+      filename: the name of the file in the form "/bucket/object".
+      content: list of content to put in file in LevelDB format.
+    """
+    test_file = cloudstorage.open(filename, mode="w")
+    with records.RecordsWriter(test_file) as w:
+      for c in content:
+        w.write(c)
+    test_file.close()
+
+  def testSingleFileNoRecord(self):
+    filename = "/%s/empty-file" % self.TEST_BUCKET
+    self.create_test_file(filename, [])
+    reader = self.READER_CLS([filename])
+
+    self.assertRaises(StopIteration, reader.next)
+
+  def testSingleFileOneRecord(self):
+    filename = "/%s/single-record-file" % self.TEST_BUCKET
+    data = "foobardata"
+    self.create_test_file(filename, [data])
+    reader = self.READER_CLS([filename])
+
+    self.assertEqual(data, reader.next())
+    self.assertRaises(StopIteration, reader.next)
+
+  def testSingleFileManyRecords(self):
+    filename = "/%s/many-records-file" % self.TEST_BUCKET
+    data = []
+    for record_num in range(100):  # Make 100 records
+      data.append(("%03d" % record_num) * 10)  # Make each record 30 chars long
+    self.create_test_file(filename, data)
+    reader = self.READER_CLS([filename])
+
+    for record in data:
+      self.assertEqual(record, reader.next())
+    self.assertRaises(StopIteration, reader.next)
+    # ensure StopIteration is still raised after its first encountered
+    self.assertRaises(StopIteration, reader.next)
+
+  def testManyFilesManyRecords(self):
+    filenames = []
+    all_data = []
+    for file_num in range(10):  # Make 10 files
+      filename = "/%s/file-%03d" % (self.TEST_BUCKET, file_num)
+      data_set = []
+      for record_num in range(10):  # Make 10 records, each 30 chars long
+        data_set.append(("%03d" % record_num) * 10)
+      self.create_test_file(filename, data_set)
+      filenames.append(filename)
+      all_data.append(data_set)
+    reader = self.READER_CLS(filenames)
+
+    for data_set in all_data:
+      for record in data_set:
+        self.assertEqual(record, reader.next())
+    self.assertRaises(StopIteration, reader.next)
+
+  def testManyFilesSomeEmpty(self):
+    filenames = []
+    all_data = []
+    for file_num in range(50):  # Make 10 files
+      filename = "/%s/file-%03d" % (self.TEST_BUCKET, file_num)
+      data_set = []
+      for record_num in range(file_num % 5):  # Make up to 4 records
+        data_set.append(("%03d" % record_num) * 10)
+      self.create_test_file(filename, data_set)
+      filenames.append(filename)
+      all_data.append(data_set)
+    reader = self.READER_CLS(filenames)
+
+    for data_set in all_data:
+      for record in data_set:
+        self.assertEqual(record, reader.next())
+    self.assertRaises(StopIteration, reader.next)
+
+  def testSerialization(self):
+    filenames = []
+    all_data = []
+    for file_num in range(50):  # Make 10 files
+      filename = "/%s/file-%03d" % (self.TEST_BUCKET, file_num)
+      data_set = []
+      for record_num in range(file_num % 5):  # Make up to 4 records
+        data_set.append(("%03d" % record_num) * 10)
+      self.create_test_file(filename, data_set)
+      filenames.append(filename)
+      all_data.append(data_set)
+    reader = self.READER_CLS(filenames)
+
+    # Serialize before using
+    reader = self.READER_CLS.from_json(reader.to_json())
+
+    for data_set in all_data:
+      for record in data_set:
+        self.assertEqual(record, reader.next())
+        # Serialize after each read
+        reader = self.READER_CLS.from_json(reader.to_json())
+    self.assertRaises(StopIteration, reader.next)
+
+    # Serialize after StopIteration reached
+    reader = self.READER_CLS.from_json(reader.to_json())
+    self.assertRaises(StopIteration, reader.next)
 
 if __name__ == "__main__":
   unittest.main()

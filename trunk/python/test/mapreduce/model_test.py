@@ -18,20 +18,21 @@
 
 
 # Disable "Invalid method name"
-# pylint: disable-msg=C6409
+# pylint: disable=g-bad-name
 
 import datetime
 import os
 import types
 import unittest
+import urlparse
 
 from google.appengine.api import apiproxy_stub_map
-from google.appengine.api import datastore_errors
 from google.appengine.api import datastore_file_stub
 from google.appengine.ext import db
-from mapreduce import control
+from google.appengine.ext import testbed
 from mapreduce import hooks
 from mapreduce import model
+from google.appengine.ext.webapp import mock_webapp
 
 
 class TestHandler(object):
@@ -66,84 +67,21 @@ def test_handler_function(entity):
   pass
 
 
-class TestJsonType(object):
-  """Test class with to_json/from_json methods."""
+class HugeTaskTest(unittest.TestCase):
+  """HugeTask tests.
 
-  def __init__(self, size=0):
-    self.size = size
+  Other tests are in end_to_end_test.py
+  """
 
-  def to_json(self):
-    return {'size': self.size}
-
-  @classmethod
-  def from_json(cls, json):
-    return cls(json['size'])
-
-
-class EmptyDictJsonType(object):
-  """Test class which serializes to empty json dict."""
-
-  def to_json(self):
-    return {}
-
-  @classmethod
-  def from_json(cls, json):
-    return cls()
-
-
-class TestEntity(db.Model):
-  """Test entity class."""
-
-  json_property = model.JsonProperty(TestJsonType)
-  json_property_default_value = model.JsonProperty(
-      TestJsonType, default=TestJsonType())
-  empty_json_property = model.JsonProperty(EmptyDictJsonType)
-
-ENTITY_KIND = '__main__.TestEntity'
-
-
-class JsonPropertyTest(unittest.TestCase):
-  """Test model.JsonProperty."""
-
-  def testGetValueForDatastore(self):
-    """Test get_value_for_datastore method."""
-    e = TestEntity()
-    self.assertEquals(None, TestEntity.json_property.get_value_for_datastore(e))
-    e.json_property = TestJsonType(5)
-    self.assertEquals(
-        u'{"size": 5}', TestEntity.json_property.get_value_for_datastore(e))
-
-    e.empty_json_property = EmptyDictJsonType()
-    self.assertEquals(
-        None, TestEntity.empty_json_property.get_value_for_datastore(e))
-
-  def testMakeValueFromDatastore(self):
-    """Test make_value_from_datastore method."""
-    self.assertEquals(
-        None, TestEntity.json_property.make_value_from_datastore(None))
-    self.assertEquals(
-        TestJsonType,
-        type(TestEntity.json_property.make_value_from_datastore('{"size":4}')))
-    self.assertTrue(
-        4,
-        TestEntity.json_property.make_value_from_datastore('{"size":4}').size)
-
-  def testValidate(self):
-    """Test validate method."""
-    self.assertRaises(
-        datastore_errors.BadValueError,
-        TestEntity.json_property.validate, 'a')
-
-  def testEmpty(self):
-    """Test empty() method."""
-    self.assertTrue(TestEntity.json_property.empty(None))
-    self.assertFalse(TestEntity.json_property.empty('abcd'))
-
-  def testDefaultValue(self):
-    """Test default value."""
-    e = TestEntity()
-    self.assertEquals(None, e.json_property)
-    self.assertTrue(e.json_property_default_value is not None)
+  def testIncorrectPayloadVersion(self):
+    request = mock_webapp.MockRequest()
+    self.assertRaises(DeprecationWarning,
+                      model.HugeTask.decode_payload,
+                      request)
+    request.headers[model.HugeTask.PAYLOAD_VERSION_HEADER] = "0"
+    self.assertRaises(DeprecationWarning,
+                      model.HugeTask.decode_payload,
+                      request)
 
 
 class GetDescendingKeyTest(unittest.TestCase):
@@ -171,6 +109,7 @@ class TestWriter(object):
 class MapperSpecTest(unittest.TestCase):
   """Tests model.MapperSpec."""
 
+  ENTITY_KIND = "__main__.TestEntity"
   TEST_HANDLER = __name__ + "." + TestHandler.__name__
   TEST_READER = __name__ + "." + TestReader.__name__
   TEST_WRITER = __name__ + "." + TestWriter.__name__
@@ -179,14 +118,14 @@ class MapperSpecTest(unittest.TestCase):
     self.default_json = {
         "mapper_handler_spec": self.TEST_HANDLER,
         "mapper_input_reader": self.TEST_READER,
-        "mapper_params": {"entity_kind": ENTITY_KIND},
+        "mapper_params": {"entity_kind": self.ENTITY_KIND},
         "mapper_shard_count": 8}
 
   def testToJson(self):
     mapper_spec = model.MapperSpec(
         self.TEST_HANDLER,
         self.TEST_READER,
-        {"entity_kind": ENTITY_KIND},
+        {"entity_kind": self.ENTITY_KIND},
         8)
     self.assertEquals(self.default_json,
                       mapper_spec.to_json())
@@ -194,7 +133,7 @@ class MapperSpecTest(unittest.TestCase):
     mapper_spec = model.MapperSpec(
         self.TEST_HANDLER,
         self.TEST_READER,
-        {"entity_kind": ENTITY_KIND},
+        {"entity_kind": self.ENTITY_KIND},
         8,
         output_writer_spec=self.TEST_WRITER)
     d = dict(self.default_json)
@@ -217,7 +156,6 @@ class MapperSpecTest(unittest.TestCase):
     ms = model.MapperSpec.from_json(d)
     self.assertEquals(self.TEST_WRITER, ms.output_writer_spec)
     self.assertEquals(TestWriter, ms.output_writer_class())
-
 
   def specForHandler(self, handler_spec):
     self.default_json["mapper_handler_spec"] = handler_spec
@@ -334,11 +272,18 @@ class MapreduceStateTest(unittest.TestCase):
     """Test set_processed_counts method."""
     mapreduce_state = model.MapreduceState.create_new()
     mapreduce_state.set_processed_counts([1, 2])
+    self.assertTrue(mapreduce_state.chart_url.startswith(
+        "http://chart.apis.google.com/chart?"))
     self.assertEquals(
-        "http://chart.apis.google.com/chart?chxt=y%2Cx&"
-        "chd=s%3Ad6&chxr=0%2C0%2C2.1&chco=0000ff&chbh=a&chs=300x200"
-         "&cht=bvg&chxl=0%3A%7C0%7C2%7C1%3A%7C0%7C1",
-         mapreduce_state.chart_url)
+        {u"cht": [u"bvg"],
+         u"chs": [u"300x200"],
+         u"chxr": [u"0,0,2.1"],
+         u"chxt": [u"y,x"],
+         u"chd": [u"s:d6"],
+         u"chbh": [u"a"],
+         u"chxl": [u"0:|0|2|1:|0|1"],
+         u"chco": [u"0000ff"]},
+        urlparse.parse_qs(urlparse.urlparse(mapreduce_state.chart_url).query))
 
 
 class ShardStateTest(unittest.TestCase):
@@ -346,9 +291,13 @@ class ShardStateTest(unittest.TestCase):
 
   def setUp(self):
     os.environ["APPLICATION_ID"] = "my-app"
+    self.testbed = testbed.Testbed()
+    self.testbed.activate()
+    self.testbed.init_datastore_v3_stub()
 
   def tearDown(self):
     del os.environ["APPLICATION_ID"]
+    self.testbed.deactivate()
 
   def testAccessors(self):
     """Tests simple accessors."""
@@ -375,6 +324,26 @@ class ShardStateTest(unittest.TestCase):
     self.assertEquals(state.update_time, another_state.update_time)
     self.assertEquals(state.shard_description, another_state.shard_description)
     self.assertEquals(state.last_work_item, another_state.last_work_item)
+
+  def testFindAllByMapreduceState(self):
+    mr_state = model.MapreduceState.create_new("mapreduce-id")
+    mr_state.mapreduce_spec = model.MapreduceSpec(
+        "mapreduce", "mapreduce-id",
+        model.MapperSpec("handler", "input-reader",
+                         {}, shard_count=304).to_json())
+    mr_state.put()
+    for i in range(304):
+      model.ShardState.create_new("mapreduce-id", i).put()
+    @db.transactional(xg=False)
+    def non_xg_tx():
+      # Open a single non-related entity group to ensure
+      # find_all_by_mapreduce_state does not attempt to use outer transaction
+      mr_state2 = model.MapreduceState.create_new("unrelated-mapreduce-id")
+      mr_state2.put()
+      shard_states = model.ShardState.find_all_by_mapreduce_state(mr_state)
+      for i, ss in enumerate(shard_states):
+        self.assertEqual(i, ss.shard_number)
+    non_xg_tx()
 
 
 class CountersMapTest(unittest.TestCase):
@@ -440,5 +409,5 @@ class CountersMapTest(unittest.TestCase):
     self.assertEquals(0, counters_map.get("1"))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   unittest.main()

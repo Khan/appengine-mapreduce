@@ -17,8 +17,6 @@
 
 
 
-import base64
-import cgi
 import os
 from mapreduce.lib import simplejson
 import shutil
@@ -32,7 +30,8 @@ from mapreduce import errors
 from mapreduce import handlers
 from mapreduce import status
 from testlib import testutil
-from mapreduce import mock_webapp
+from mapreduce import test_support
+from google.appengine.ext.webapp import mock_webapp
 
 
 class TestKind(db.Model):
@@ -453,6 +452,7 @@ class ListJobsTest(testutil.HandlerTestBase):
     TestKind().put()
     self.start.request.set("name", "my job 1")
     self.start.post()
+    time.sleep(.1)  # Can not start two jobs before time advances
     self.start.request.set("name", "my job 2")
     self.start.post()
 
@@ -512,15 +512,7 @@ class GetJobDetailTest(testutil.HandlerTestBase):
 
   def KickOffMapreduce(self):
     """Executes pending kickoff task."""
-    kickoff_task = self.taskqueue.GetTasks("default")[0]
-    handler = handlers.KickOffJobHandler()
-    handler.initialize(mock_webapp.MockRequest(), mock_webapp.MockResponse())
-    handler.request.path = "/mapreduce/kickoffjob_callback"
-    handler.request.params.update(
-        cgi.parse_qsl(base64.b64decode(kickoff_task["body"])))
-    handler.request.headers["X-AppEngine-QueueName"] = "default"
-    handler.post()
-    self.taskqueue.DeleteTask("default", kickoff_task["name"])
+    test_support.execute_all_tasks(self.taskqueue)
 
   def testCSRF(self):
     """Test that we check the X-Requested-With header."""
@@ -538,7 +530,7 @@ class GetJobDetailTest(testutil.HandlerTestBase):
     expected_keys = set([
         "active", "chart_url", "counters", "mapper_spec", "mapreduce_id",
         "name", "result_status", "shards", "start_timestamp_ms",
-        "updated_timestamp_ms", "params", "hooks_class_name"])
+        "updated_timestamp_ms", "params", "hooks_class_name", "chart_width"])
     expected_shard_keys = set([
         "active", "counters", "last_work_item", "result_status",
         "shard_description", "shard_id", "shard_number",
@@ -557,7 +549,7 @@ class GetJobDetailTest(testutil.HandlerTestBase):
     expected_keys = set([
         "active", "chart_url", "counters", "mapper_spec", "mapreduce_id",
         "name", "result_status", "shards", "start_timestamp_ms",
-        "updated_timestamp_ms", "params", "hooks_class_name"])
+        "updated_timestamp_ms", "params", "hooks_class_name", "chart_width"])
 
     self.assertEquals(expected_keys, set(result.keys()))
 

@@ -9,15 +9,15 @@
 import unittest
 
 from mapreduce.lib import pipeline
-from mapreduce.lib import files
-from mapreduce.lib.files import file_service_pb
-from mapreduce.lib.files import records
+from google.appengine.api import files
+from google.appengine.api.files import file_service_pb
 from google.appengine.ext import db
 from mapreduce import base_handler
 from mapreduce import control
 from mapreduce import mapreduce_pipeline
 from mapreduce import model
 from mapreduce import output_writers
+from mapreduce import records
 from mapreduce import shuffler
 from mapreduce import test_support
 from testlib import testutil
@@ -212,6 +212,31 @@ class ShuffleEndToEndTest(testutil.HandlerTestBase):
   def _send_mail(self, sender, subject, body, html=None):
     """Callback function for sending mail."""
     self.emails.append((sender, subject, body, html))
+
+  def testShuffleNoData(self):
+    input_file = files.blobstore.create()
+    files.finalize(input_file)
+    input_file = files.blobstore.get_file_name(
+        files.blobstore.get_blob_key(input_file))
+
+    p = shuffler.ShufflePipeline(
+        "testjob", [input_file, input_file, input_file])
+    p.start()
+    test_support.execute_until_empty(self.taskqueue)
+
+    p = shuffler.ShufflePipeline.from_id(p.pipeline_id)
+    for filename in p.outputs.default.value:
+      self.assertEqual(0, files.stat(filename).st_size)
+
+  def testShuffleNoFile(self):
+    p = shuffler.ShufflePipeline(
+        "testjob", [])
+    p.start()
+    test_support.execute_until_empty(self.taskqueue)
+
+    p = shuffler.ShufflePipeline.from_id(p.pipeline_id)
+    for filename in p.outputs.default.value:
+      self.assertEqual(0, files.stat(filename).st_size)
 
   def testShuffleFiles(self):
     """Test shuffling multiple files."""

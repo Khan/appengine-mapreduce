@@ -33,17 +33,21 @@ import time
 
 from mapreduce.lib import pipeline
 from mapreduce.lib.pipeline import common as pipeline_common
-from mapreduce.lib import files
-from mapreduce.lib.files import file_service_pb
-from mapreduce.lib.files import records
+from google.appengine.api import files
+from google.appengine.api import modules
+from google.appengine.api.files import file_service_pb
 from google.appengine.ext import db
-from mapreduce import base_handler
 from mapreduce import context
 from mapreduce import errors
 from mapreduce import input_readers
 from mapreduce import mapper_pipeline
 from mapreduce import operation
 from mapreduce import output_writers
+from mapreduce import pipeline_base
+from mapreduce import records
+
+# pylint: disable=g-bad-name
+# pylint: disable=protected-access
 
 
 class _OutputFile(db.Model):
@@ -139,7 +143,7 @@ def _sort_records_map(records):
   entity.put()
 
 
-class _SortChunksPipeline(base_handler.PipelineBase):
+class _SortChunksPipeline(pipeline_base.PipelineBase):
   """A pipeline to sort multiple key-value files.
 
   Args:
@@ -174,7 +178,7 @@ class _SortChunksPipeline(base_handler.PipelineBase):
       yield pipeline_common.Return(result)
 
 
-class _CollectOutputFiles(base_handler.PipelineBase):
+class _CollectOutputFiles(pipeline_base.PipelineBase):
   """Collect output file names from _OutputFile entities for given jobs.
 
   Args:
@@ -192,7 +196,7 @@ class _CollectOutputFiles(base_handler.PipelineBase):
     return result
 
 
-class _CleanupOutputFiles(base_handler.PipelineBase):
+class _CleanupOutputFiles(pipeline_base.PipelineBase):
   """Cleanup _OutputFile entities for given job ids.
 
   Args:
@@ -247,7 +251,7 @@ class _MergingReader(input_readers.InputReader):
     """
     ctx = context.get()
     mapper_spec = ctx.mapreduce_spec.mapper
-    shard_number = ctx.shard_state.shard_number
+    shard_number = ctx._shard_state.shard_number
     filenames = mapper_spec.params[self.FILES_PARAM][shard_number]
 
     if len(filenames) != len(self._offsets):
@@ -441,36 +445,27 @@ class _HashingBlobstoreOutputWriter(output_writers.BlobstoreOutputWriterBase):
     return {"filenames": self._filenames}
 
   @classmethod
-  def create(cls, mapreduce_state, shard_number):
-    """Create new writer for a shard.
-
-    Args:
-      mapreduce_state: an instance of model.MapreduceState describing current
-      job. State can be modified.
-      shard_number: shard number as integer.
-    """
-    return cls(mapreduce_state.writer_state["filenames"])
+  def create(cls, mr_spec, shard_number, shard_attempt, _writer_state=None):
+    """Inherit docs."""
+    return cls(_writer_state["filenames"])
 
   @classmethod
   def get_filenames(cls, mapreduce_state):
-    """Obtain output filenames from mapreduce state.
+    """See parent class."""
+    if mapreduce_state.writer_state:
+      return mapreduce_state.writer_state["filenames"]
+    return []
 
-    Args:
-      mapreduce_state: an instance of model.MapreduceState
+  def finalize(self, ctx, shard_state):
+    pass
 
-    Returns:
-        list of filenames this writer writes to or None if writer
-        doesn't write to a file.
-    """
-    return mapreduce_state.writer_state["filenames"]
-
-  def write(self, data, ctx):
+  def write(self, data):
     """Write data.
 
     Args:
       data: actual data yielded from handler. Type is writer-specific.
-      ctx: an instance of context.Context.
     """
+    ctx = context.get()
     if len(data) != 2:
       logging.error("Got bad tuple of length %d (2-tuple expected): %s",
                     len(data), data)
@@ -495,7 +490,7 @@ class _HashingBlobstoreOutputWriter(output_writers.BlobstoreOutputWriterBase):
     ctx.get_pool(pool_name).append(proto.Encode())
 
 
-class _ShardOutputs(base_handler.PipelineBase):
+class _ShardOutputs(pipeline_base.PipelineBase):
   """Takes a flat list of filenames, returns a list of lists, each with
   one member each.
   """
@@ -524,7 +519,7 @@ def _merge_map(key, values, partial):
   yield proto.Encode()
 
 
-class _MergePipeline(base_handler.PipelineBase):
+class _MergePipeline(pipeline_base.PipelineBase):
   """Pipeline to merge sorted chunks.
 
   This pipeline merges together individually sorted chunks of each shard.
@@ -569,7 +564,7 @@ def _hashing_map(binary_record):
   yield (proto.key(), proto.value())
 
 
-class _HashPipeline(base_handler.PipelineBase):
+class _HashPipeline(pipeline_base.PipelineBase):
   """A pipeline to read mapper output and hash by key.
 
   Args:
@@ -588,22 +583,22 @@ class _HashPipeline(base_handler.PipelineBase):
     if shards is None:
       shards = len(filenames)
     yield mapper_pipeline.MapperPipeline(
-            job_name + "-shuffle-hash",
-            __name__ + "._hashing_map",
-            input_readers.__name__ + ".RecordsReader",
-            output_writer_spec= __name__ + "._HashingBlobstoreOutputWriter",
-            params={'files': filenames},
-            shards=shards)
+        job_name + "-shuffle-hash",
+        __name__ + "._hashing_map",
+        input_readers.__name__ + ".RecordsReader",
+        output_writer_spec= __name__ + "._HashingBlobstoreOutputWriter",
+        params={'files': filenames},
+        shards=shards)
 
 
-class _ShuffleServicePipeline(base_handler.PipelineBase):
+class _ShuffleServicePipeline(pipeline_base.PipelineBase):
   """A pipeline to invoke shuffle service.
 
   Args:
     input_files: list of file names to shuffle.
 
   Returns:
-    list of shuffled file names.
+    list of shuffled file names. Empty list if there is no input.
   """
   async = True
 
@@ -613,6 +608,17 @@ class _ShuffleServicePipeline(base_handler.PipelineBase):
       ]
 
   def run(self, job_name, input_files):
+    # Return immediately if we have no content to shuffle.
+    # Big shuffler can not handle no input.
+    empty = True
+    for filename in input_files:
+      if files.stat(filename).st_size > 0:
+        empty = False
+        break
+    if empty:
+      self.complete([])
+      return
+
     shard_number = len(input_files)
     output_files = []
     for i in range(shard_number):
@@ -621,19 +627,33 @@ class _ShuffleServicePipeline(base_handler.PipelineBase):
           _blobinfo_uploaded_filename=blob_file_name)
       output_files.append(file_name)
     self.fill(self.outputs._output_files, output_files)
+
+    # Support shuffler callbacks going to specific modules and
+    # specific non-default versions of those modules.
+    target = modules.get_current_version_name()
+    module_name = modules.get_current_module_name()
+    if module_name != "default":
+      # NOTE(user): The final dot is necessary here because old versions
+      # of the shuffler library would put "myversion.12345678" in this field,
+      # expecting the admin-shuffler app to remove the timestamp suffix.
+      target = "%s.%s." % (target, module_name)
+
     files.shuffler.shuffle("%s-%s" % (job_name, int(time.time())),
                            input_files,
                            output_files,
                            {
                                "url": self.get_callback_url(),
+                               # NOTE(user): This is always GET because of
+                               # how the admin_shuffler app adds the callback
+                               # task with additional URL params.
                                "method": "GET",
                                "queue": self.queue_name,
-                               "version": os.environ["CURRENT_VERSION_ID"],
+                               "version": target,
                            })
 
   def callback(self, **kwargs):
     if "error" in kwargs:
-      self.abort("Error from shuffle service: %s" % kwargs["error"])
+      self.retry("Error from shuffle service: %s" % kwargs["error"])
       return
 
     output_files = self.outputs._output_files.value
@@ -651,7 +671,7 @@ class _ShuffleServicePipeline(base_handler.PipelineBase):
     return True
 
 
-class ShufflePipeline(base_handler.PipelineBase):
+class ShufflePipeline(pipeline_base.PipelineBase):
   """A pipeline to shuffle multiple key-value files.
 
   Args:
@@ -663,10 +683,13 @@ class ShufflePipeline(base_handler.PipelineBase):
       to the number of input files.
 
   Returns:
-    The list of filenames as string. Resulting files contain serialized
-    file_service_pb.KeyValues protocol messages with all values collated
-    to a single key.
+    default: a list of filenames as string. Resulting files contain
+      serialized file_service_pb.KeyValues protocol messages with
+      all values collated to a single key. When there is no output,
+      an empty list from shuffle service or a list of empty files from
+      in memory shuffler.
   """
+
   def run(self, job_name, filenames, shards=None):
     if files.shuffler.available():
       yield _ShuffleServicePipeline(job_name, filenames)

@@ -579,7 +579,7 @@ class AbstractDatastoreInputReader(InputReader):
         ds_query_with_filters.update({'%s %s' % (key, op): value})
         try:
           random_keys = ds_query_with_filters.Get(shard_count *
-                                                  cls._OVERSAMPLING_FACTOR)
+                                                  oversampling_factor)
         except db.NeedIndexError, why:
           logging.warning('Need to add an index for optimal mapreduce-input'
                           ' splitting:\n%s' % why)
@@ -587,7 +587,7 @@ class AbstractDatastoreInputReader(InputReader):
           # will filter keys uniformly across the key-name space!
 
     if not random_keys:
-      random_keys = ds_query.Get(shard_count * cls._OVERSAMPLING_FACTOR)
+      random_keys = ds_query.Get(shard_count * oversampling_factor)
 
     if not random_keys:
       # There are no entities with scatter property. We have no idea

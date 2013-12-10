@@ -37,7 +37,10 @@ from google.appengine.ext import ndb
 from google.appengine import runtime
 from google.appengine.api import datastore_errors
 from google.appengine.api import logservice
-from google.appengine.api import modules
+try:
+    from google.appengine.api import modules
+except ImportError:
+    import fake_modules as modules
 from google.appengine.api import taskqueue
 from google.appengine.ext import db
 from mapreduce import base_handler

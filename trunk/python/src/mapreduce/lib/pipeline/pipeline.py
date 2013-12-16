@@ -2443,7 +2443,6 @@ class _BarrierHandler(webapp.RequestHandler):
   """Request handler for triggering barriers."""
 
   def post(self):
-    logging.info("Serving %s", self.request)
     if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
       self.response.set_status(403)
       return
@@ -2458,7 +2457,6 @@ class _PipelineHandler(webapp.RequestHandler):
   """Request handler for running pipelines."""
 
   def post(self):
-    logging.info("Serving %s", self.request)
     if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
       self.response.set_status(403)
       return
@@ -2473,7 +2471,6 @@ class _FanoutAbortHandler(webapp.RequestHandler):
   """Request handler for fanning out abort notifications."""
 
   def post(self):
-    logging.info("Serving %s", self.request)
     if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
       self.response.set_status(403)
       return
@@ -2488,7 +2485,6 @@ class _FanoutHandler(webapp.RequestHandler):
   """Request handler for fanning out pipeline children."""
 
   def post(self):
-    logging.info("Serving %s", self.request)
     if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
       self.response.set_status(403)
       return
@@ -2534,7 +2530,6 @@ class _CleanupHandler(webapp.RequestHandler):
   """Request handler for cleaning up a Pipeline."""
 
   def post(self):
-    logging.info("Serving %s", self.request)
     if 'HTTP_X_APPENGINE_TASKNAME' not in self.request.environ:
       self.response.set_status(403)
       return
@@ -2569,7 +2564,6 @@ class _CallbackHandler(webapp.RequestHandler):
     self.get()
 
   def get(self):
-    logging.info("Serving %s", self.request)
     # NOTE: The rest of these validations and the undescriptive error code 400
     # are present to address security risks of giving external users access to
     # cause PipelineRecord lookups and execution. This approach is still

@@ -170,7 +170,7 @@ class _PropertyRangeModelIterator(RangeIterator):
       else:
         cursor = self._query.cursor_after()
 
-    if isinstance(cursor, basestring):
+    if cursor is None or isinstance(cursor, basestring):
       cursor_object = False
     else:
       cursor_object = True

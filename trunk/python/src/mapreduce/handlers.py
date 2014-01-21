@@ -30,6 +30,7 @@ import random
 import sys
 import time
 import traceback
+import zlib
 from mapreduce.lib import simplejson
 
 from google.appengine.ext import ndb
@@ -1235,7 +1236,8 @@ class KickOffJobHandler(base_handler.TaskQueueHandler):
           state.mapreduce_spec.mapper)
     else:
       readers = [input_reader_class.from_json_str(json) for json in
-                 simplejson.loads(serialized_input_readers.payload)]
+                 simplejson.loads(zlib.decompress(
+                 serialized_input_readers.payload))]
 
     if not readers:
       return None, None
@@ -1250,7 +1252,8 @@ class KickOffJobHandler(base_handler.TaskQueueHandler):
       serialized_input_readers = model._HugeTaskPayload(
           key_name=serialized_input_readers_key, parent=state)
       readers_json_str = [i.to_json_str() for i in readers]
-      serialized_input_readers.payload = simplejson.dumps(readers_json_str)
+      serialized_input_readers.payload = zlib.compress(simplejson.dumps(
+                                                       readers_json_str))
     return readers, serialized_input_readers
 
   def _setup_output_writer(self, state):

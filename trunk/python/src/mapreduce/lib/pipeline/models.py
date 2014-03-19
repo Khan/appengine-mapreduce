@@ -190,6 +190,43 @@ class _BarrierRecord(db.Model):
     return '_AE_Pipeline_Barrier'
 
 
+class _BarrierListener(db.Model):
+  """Represents one instance of a barrier listening to a slot.
+
+  Each entity of this kind is a child entity of a _SlotRecord and indicates
+  that when the slot is filled, the barrier referenced by listening_barrier
+  might need to be triggered. Since triggering a barrier is idempotent and
+  we'll only trigger a barrier if all slots have actually been filled, it's ok
+  for incorrect and duplicate BarrierListener entities to exist, as long as
+  it's a superset of the actual set of records. This structure allows us to do
+  a consistent read for listening barriers (using an ancestor query), and also
+  allows us to safely add a batch of BarrierListeners (which will span multiple
+  entity groups) outside of a transaction when adding or modifying a barrier.
+
+  Properties:
+    listening_barrier: The barrier to consider triggering when the parent slot
+      is full.
+  """
+  listening_barrier = db.ReferenceProperty(_BarrierRecord)
+
+  @classmethod
+  def kind(cls):
+    return '_AE_Pipeline_BarrierListener'
+
+  @staticmethod
+  def generate_subscription_entities(barrier, slot_keys):
+    """Yield new entities to subscribe the given barrier to the given slots.
+
+    The entities must be later stored. Note that it's unsafe to store all of
+    these entities in the same transaction unless it is known that all given
+    slots are in the same entity group.
+    """
+    for slot_key in slot_keys:
+      yield _BarrierListener(
+        parent=slot_key,
+        listening_barrier=barrier)
+
+
 class _StatusRecord(db.Model):
   """Represents the current status of a pipeline.
 

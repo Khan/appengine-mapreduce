@@ -59,6 +59,7 @@ import util as mr_util
 _PipelineRecord = models._PipelineRecord
 _SlotRecord = models._SlotRecord
 _BarrierRecord = models._BarrierRecord
+_BarrierListener = models._BarrierListener
 _StatusRecord = models._StatusRecord
 
 
@@ -1451,10 +1452,15 @@ class _PipelineContext(object):
     """
     if not isinstance(slot_key, db.Key):
       slot_key = db.Key(slot_key)
+
     query = (
-        _BarrierRecord.all(cursor=cursor)
-        .filter('blocking_slots =', slot_key))
-    results = query.fetch(max_to_notify)
+        _BarrierListener.all(cursor=cursor)
+        .ancestor(slot_key))
+    query_results = query.fetch(max_to_notify)
+    barrier_keys = set(
+        _BarrierListener.listening_barrier.get_value_for_datastore(listener)
+        for listener in query_results)
+    results = db.get(barrier_keys)
 
     # Fetch all blocking _SlotRecords for any potentially triggered barriers.
     blocking_slot_keys = []
@@ -1516,7 +1522,7 @@ class _PipelineContext(object):
       db.put(updated_barriers)
 
     # Task continuation with sequence number to prevent fork-bombs.
-    if len(results) == max_to_notify:
+    if len(query_results) == max_to_notify:
       the_match = re.match('(.*)-ae-barrier-notify-([0-9]+)', self.task_name)
       if the_match:
         prefix = the_match.group(1)
@@ -1692,12 +1698,16 @@ class _PipelineContext(object):
           class_path=pipeline._class_path,
           max_attempts=pipeline.max_attempts))
 
-      entities_to_put.append(_BarrierRecord(
+      finalize_barrier = _BarrierRecord(
           parent=pipeline._pipeline_key,
           key_name=_BarrierRecord.FINALIZE,
           target=pipeline._pipeline_key,
           root_pipeline=pipeline._pipeline_key,
-          blocking_slots=list(output_slots)))
+          blocking_slots=list(output_slots))
+      entities_to_put.append(finalize_barrier)
+
+      entities_to_put.extend(_BarrierListener.generate_subscription_entities(
+          finalize_barrier, output_slots))
 
       db.put(entities_to_put)
 
@@ -2181,19 +2191,27 @@ class _PipelineContext(object):
         pipelines_to_run.add(child_pipeline_key)
         child_pipeline.start_time = self._gettime()
       else:
-        entities_to_put.append(_BarrierRecord(
+        start_barrier = _BarrierRecord(
             parent=child_pipeline_key,
             key_name=_BarrierRecord.START,
             target=child_pipeline_key,
             root_pipeline=root_pipeline_key,
-            blocking_slots=list(dependent_slots)))
+            blocking_slots=list(dependent_slots))
+        entities_to_put.append(start_barrier)
 
-      entities_to_put.append(_BarrierRecord(
+        entities_to_put.extend(_BarrierListener.generate_subscription_entities(
+            start_barrier, dependent_slots))
+
+      finalize_barrier = _BarrierRecord(
           parent=child_pipeline_key,
           key_name=_BarrierRecord.FINALIZE,
           target=child_pipeline_key,
           root_pipeline=root_pipeline_key,
-          blocking_slots=list(output_slots)))
+          blocking_slots=list(output_slots))
+      entities_to_put.append(finalize_barrier)
+
+      entities_to_put.extend(_BarrierListener.generate_subscription_entities(
+          finalize_barrier, output_slots))
 
     db.put(entities_to_put)
     self.transition_run(pipeline_key,
@@ -2260,6 +2278,30 @@ class _PipelineContext(object):
       UnexpectedPipelineError if blocking_slot_keys was not empty and the
       _BarrierRecord has gone missing.
     """
+    def get_new_slot_keys():
+      # Gets the slots that the finalization barrier needs to start listenting
+      # to. Also gets the finalization barrier itself for convenience.
+      barrier_key = db.Key.from_path(
+          _BarrierRecord.kind(), _BarrierRecord.FINALIZE,
+          parent=pipeline_key)
+      finalize_barrier = db.get(barrier_key)
+      if finalize_barrier is None:
+        raise UnexpectedPipelineError(
+            'Pipeline ID "%s" cannot update finalize barrier. '
+            'Does not exist.' % pipeline_key.name())
+      else:
+        return (blocking_slot_keys - set(finalize_barrier.blocking_slots),
+                finalize_barrier)
+
+    # Before the main transaction, record on all new slots that the finalize
+    # barrier is listening to them (since it's about to). This needs to be done
+    # outside of a transaction since it can span an arbitrary number of entity
+    # groups.
+    if blocking_slot_keys:
+      new_slot_keys, finalize_barrier = get_new_slot_keys()
+      db.put(_BarrierListener.generate_subscription_entities(
+          finalize_barrier, new_slot_keys))
+
     def txn():
       pipeline_record = db.get(pipeline_key)
       if pipeline_record is None:
@@ -2302,18 +2344,9 @@ class _PipelineContext(object):
         # include all of the outputs of any pipelines that it runs, to ensure
         # that finalized calls will not happen until all child pipelines have
         # completed.
-        barrier_key = db.Key.from_path(
-            _BarrierRecord.kind(), _BarrierRecord.FINALIZE,
-            parent=pipeline_key)
-        finalize_barrier = db.get(barrier_key)
-        if finalize_barrier is None:
-          raise UnexpectedPipelineError(
-              'Pipeline ID "%s" cannot update finalize barrier. '
-              'Does not exist.' % pipeline_key.name())
-        else:
-          finalize_barrier.blocking_slots = list(
-              blocking_slot_keys.union(set(finalize_barrier.blocking_slots)))
-          finalize_barrier.put()
+        new_slot_keys, finalize_barrier = get_new_slot_keys()
+        finalize_barrier.blocking_slots.extend(new_slot_keys)
+        finalize_barrier.put()
 
     db.run_in_transaction(txn)
 

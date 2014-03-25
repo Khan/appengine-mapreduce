@@ -2960,9 +2960,10 @@ def get_status_tree(root_pipeline_id):
         # the Datastore but were never run due to mid-flight task failures.
         child_pipeline_record = found_pipeline_dict.get(child_pipeline_key)
         if child_pipeline_record is None:
-          raise PipelineStatusError(
+          logging.warning(
               'Pipeline ID "%s" points to child ID "%s" which does not exist.'
               % (pipeline_record.key().name(), child_pipeline_key.name()))
+          continue
         expand_stack.append(child_pipeline_record)
         valid_pipeline_keys.add(child_pipeline_key)
 

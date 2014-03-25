@@ -38,7 +38,6 @@ __all__ = ["MapreduceState",
 
 import cgi
 import datetime
-import logging
 import os
 import random
 import time
@@ -687,7 +686,6 @@ class MapreduceState(db.Model):
       # Auto-spacing does not work for large numbers of shards.
       pixels_per_shard = 700.0 / shard_count
       bar_thickness = int(pixels_per_shard * .9)
-      logging.error("thickness = %d", bar_thickness)
 
       chart.style = bar_chart.BarChartStyle(bar_thickness=bar_thickness,
         bar_gap=0.1, use_fractional_gap_spacing=True)

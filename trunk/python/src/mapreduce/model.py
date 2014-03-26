@@ -38,7 +38,6 @@ __all__ = ["MapreduceState",
 
 import cgi
 import datetime
-import logging
 import os
 import random
 import time

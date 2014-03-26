@@ -2680,6 +2680,17 @@ def _get_timestamp_ms(when):
   return int(ms_since_epoch)
 
 
+def truncate_value(value):
+  """Shorten the given value, preserving dict structure."""
+  if isinstance(value, dict):
+    new_dict = {}
+    for k, v in value.iteritems():
+      new_dict.update([(k, truncate_value(v))])
+    return new_dict
+  else:
+    return str(value)[:100]
+
+
 def _get_internal_status(pipeline_key=None,
                          pipeline_dict=None,
                          slot_dict=None,
@@ -2785,21 +2796,9 @@ def _get_internal_status(pipeline_key=None,
   # can reasonably return the whole tree of pipelines and their outputs.
   # Coerce each value to a string to truncate if necessary. For now if the
   # params are too big it will just cause the whole status page to break.
-  def truncate_value(value):
-    return str(value)[:100]
-
-  def truncate_dict(the_dict):
-    new_dict = {}
-    for k, v in the_dict.iteritems():
-      if isinstance(v, dict):
-        new_dict.update([(k, truncate_dict(v))])
-      else:
-        new_dict.update([(k, truncate_value(v))])
-    return new_dict
-
-  output['args'] = [truncate_dict(v) for v in output['args']]
-  output['kwargs'] = truncate_dict(output['kwargs'])
-  output['outputs'] = truncate_dict(output['outputs'])
+  output['args'] = [truncate_value(v) for v in output['args']]
+  output['kwargs'] = truncate_value(output['kwargs'])
+  output['outputs'] = truncate_value(output['outputs'])
 
   # Fix the key names in parameters to match JavaScript style.
   for value_dict in itertools.chain(
@@ -2898,7 +2897,7 @@ def _get_internal_slot(slot_key=None,
   if slot_record.status == _SlotRecord.FILLED:
     output['status'] = 'filled'
     output['fillTimeMs'] = _get_timestamp_ms(slot_record.fill_time)
-    output['value'] = slot_record.value
+    output['value'] = truncate_value(slot_record.value)
     filler_pipeline_key = (
         _SlotRecord.filler.get_value_for_datastore(slot_record))
   else:

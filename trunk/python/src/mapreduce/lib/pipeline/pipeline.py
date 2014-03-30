@@ -2801,8 +2801,7 @@ def _get_internal_status(pipeline_key=None,
 
   # Truncate args, kwargs, and outputs to < 1MB each so we
   # can reasonably return the whole tree of pipelines and their outputs.
-  # Coerce each value to a string to truncate if necessary. For now if the
-  # params are too big it will just cause the whole status page to break.
+  # Coerce each value to a string to truncate if necessary.
   output['args'] = [truncate_value(v) for v in output['args']]
   output['kwargs'] = truncate_value(output['kwargs'])
   output['outputs'] = truncate_value(output['outputs'])
@@ -3084,6 +3083,52 @@ def get_root_list(class_path=None, cursor=None, count=50):
   result_dict.update(pipelines=results)
   return result_dict
 
+
+def get_pipeline_values(pipeline_id):
+  """Get the non-truncated argument and slot values for the given pipeline.
+
+  Args:
+    pipeline_id: The id of the pipeline to look up.
+
+  Returns:
+    Dictionary with the keys:
+      args: List of positional argument slot dictionaries.
+      kwargs: Dictionary of keyword argument slot dictionaries.
+      output_values: Dictionary mapping output slot keys to values.
+
+  Raises:
+    PipelineStatusError if any input is bad.
+  """
+  pipeline_key = db.Key.from_path(_PipelineRecord.kind(), pipeline_id)
+  pipeline_record = db.get(pipeline_key)
+  if pipeline_record is None:
+    raise PipelineStatusError(
+        'Could not find pipeline ID "%s"' % pipeline_key.name())
+
+  params = pipeline_record.params
+  args = list(params['args'])
+  kwargs = params['kwargs'].copy()
+
+  # Collect all slots to fetch across arguments and outputs.
+  slot_keys = params['output_slots'].values()
+
+  for value_dict in itertools.chain(args, kwargs.itervalues()):
+    if 'slot_key' in value_dict:
+      slot_keys.append(value_dict['slot_key'])
+      # Fix the key names in parameters to match JavaScript style.
+      value_dict['slotKey'] = value_dict.pop('slot_key')
+
+  new_slot_values = {}
+  for key, slot_record in zip(slot_keys, db.get(slot_keys)):
+    if slot_record.status == _SlotRecord.FILLED:
+      new_slot_values[key] = slot_record.value
+
+  return {
+    'args': params['args'],
+    'kwargs': params['kwargs'],
+    'newSlotValues': new_slot_values
+  }
+
 ################################################################################
 
 def set_enforce_auth(new_status):
@@ -3119,5 +3164,6 @@ def create_handlers_map(prefix='.*'):
       (prefix + '/rpc/tree', status_ui._TreeStatusHandler),
       (prefix + '/rpc/class_paths', status_ui._ClassPathListHandler),
       (prefix + '/rpc/list', status_ui._RootListHandler),
+      (prefix + '/rpc/pipeline_values', status_ui._PipelineValuesHandler),
       (prefix + '(/.+)', status_ui._StatusUiHandler),
       ]

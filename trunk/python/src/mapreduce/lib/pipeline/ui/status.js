@@ -515,6 +515,65 @@ function constructStageNode(pipelineId, infoMap, sidebar) {
     containerDiv.append(outputContinerDiv);
   }
 
+  // Load full arg/output values, updating the loading state and redrawing as
+  // necessary.
+  function handleLoadFullValues(e) {
+    e.preventDefault();
+    infoMap.fullLoadState = 'loading';
+    handleHashChange();
+    $.ajax({
+      type: 'GET',
+      url: 'rpc/pipeline_values?pipeline_id=' + pipelineId,
+      dataType: 'text',
+      error: function(request, textStatus) {
+        infoMap.fullLoadState = 'error';
+        handleHashChange();
+      },
+      success: function(data, textStatus, request) {
+        var response = getResponseDataJson(null, data);
+        if (response) {
+          infoMap.fullLoadState = 'loaded';
+          infoMap.args = response.args;
+          infoMap.kwargs = response.kwargs;
+          // Some of these slots may be already un-truncated from previous
+          // similar calls, so it's a little wasteful, but still correct, to
+          // load and overwrite them again.
+          for (var slotKey in response.newSlotValues) {
+            STATUS_MAP.slots[slotKey].value = response.newSlotValues[slotKey];
+          }
+        } else {
+          infoMap.fullLoadState = 'error';
+        }
+        handleHashChange();
+      }
+    });
+  }
+
+  if (!sidebar && infoMap.fullLoadState !== 'loaded') {
+    var truncateMessageDiv = $('<div class="truncation-message-container">')
+        .text('Parameters and outputs may be truncated. ');
+
+    var loadSpan = $('<span>');
+    if (infoMap.fullLoadState === 'loading') {
+      loadSpan.text('Loading...');
+    } else if (infoMap.fullLoadState === 'error') {
+      loadSpan.text('Loading failed. ');
+      loadSpan.append($('<a>')
+          .text('Retry')
+          .attr('href', '')
+          .click(handleLoadFullValues));
+    } else {
+      // Nothing loaded yet, so show the option to load.
+      loadSpan.append($('<a>')
+          .text('Load full values')
+          .attr('href', '')
+          .click(handleLoadFullValues));
+    }
+
+    truncateMessageDiv.append(loadSpan);
+    containerDiv.append(truncateMessageDiv);
+  }
+
   // Related pipelines
   function renderRelated(relatedList, relatedTitle, classPrefix) {
     var relatedDiv = $('<div>');

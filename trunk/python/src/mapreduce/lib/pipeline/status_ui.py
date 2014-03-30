@@ -174,3 +174,11 @@ class _RootListHandler(_BaseRpcHandler):
         pipeline.get_root_list(
             class_path=self.request.get('class_path'),
             cursor=self.request.get('cursor')))
+
+class _PipelineValuesHandler(_BaseRpcHandler):
+  """RPC handler for getting the parameter and output values for a pipeline."""
+
+  def handle(self):
+    import pipeline  # Break circular dependency
+    self.json_response.update(
+        pipeline.get_pipeline_values(self.request.get('pipeline_id')))

@@ -1467,7 +1467,7 @@ class _PipelineContext(object):
     barrier_keys = set(
         _BarrierListener.listening_barrier.get_value_for_datastore(listener)
         for listener in query_results)
-    results = db.get(barrier_keys)
+    results = [r for r in db.get(barrier_keys) if r != None]
 
     # Fetch all blocking _SlotRecords for any potentially triggered barriers.
     blocking_slot_keys = []

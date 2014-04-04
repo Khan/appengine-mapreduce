@@ -131,6 +131,7 @@ class _LowMemoryPipelineRecord(object):
   arguments are truncated to save space.
   """
   def __init__(self, pipeline_record):
+    self.key_value = pipeline_record.key()
     self.class_path = pipeline_record.class_path
     # Skip root pipeline since ReferenceProperties are tricky.
     self.fanned_out = pipeline_record.fanned_out
@@ -147,6 +148,9 @@ class _LowMemoryPipelineRecord(object):
     self.params = pipeline_record.params
     self.params['args'] = [truncate_value(v) for v in self.params['args']]
     self.params['kwargs'] = truncate_value(self.params['kwargs'])
+
+  def key(self):
+    return self.key_value
 
 
 class _SlotRecord(db.Model):

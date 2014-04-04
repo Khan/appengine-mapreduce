@@ -20,6 +20,9 @@
 // Global variables.
 var AUTO_REFRESH = true;
 var ROOT_PIPELINE_ID = null;
+// Either the empty string, meaning we load the full pipeline, or a string
+// containing a number with the max depth to load.
+var DEPTH = '';
 var STATUS_MAP = null;
 
 
@@ -811,9 +814,9 @@ function handleAutoRefreshClick(event) {
   var loc = window.location;
   var newSearch = null;
   if (!AUTO_REFRESH && event.target.checked) {
-    newSearch = '?root=' + ROOT_PIPELINE_ID;
+    newSearch = '?root=' + ROOT_PIPELINE_ID + depthUrlArg();
   } else if (AUTO_REFRESH && !event.target.checked) {
-    newSearch = '?root=' + ROOT_PIPELINE_ID + '&auto=false';
+    newSearch = '?root=' + ROOT_PIPELINE_ID + '&auto=false' + depthUrlArg();
   }
 
   if (newSearch != null) {
@@ -827,12 +830,21 @@ function handleAutoRefreshClick(event) {
 function handleRefreshClick(event) {
   var loc = window.location;
   if (AUTO_REFRESH) {
-    newSearch = '?root=' + ROOT_PIPELINE_ID;
+    newSearch = '?root=' + ROOT_PIPELINE_ID + depthUrlArg();
   } else {
-    newSearch = '?root=' + ROOT_PIPELINE_ID + '&auto=false';
+    newSearch = '?root=' + ROOT_PIPELINE_ID + '&auto=false' + depthUrlArg();
   }
   loc.href = loc.protocol + '//' + loc.host + loc.pathname + newSearch;
   return false;
+}
+
+
+function depthUrlArg() {
+  if (DEPTH !== '') {
+    return '&depth=' + DEPTH
+  } else {
+    return ''
+  }
 }
 
 
@@ -851,6 +863,8 @@ function initStatus() {
         AUTO_REFRESH = false;
       } else if (mapping[0] == 'root') {
         ROOT_PIPELINE_ID = mapping[1];
+      } else if (mapping[0] == 'depth') {
+        DEPTH = mapping[1];
       }
     });
   }
@@ -858,7 +872,7 @@ function initStatus() {
   setButter('Loading... #' + ROOT_PIPELINE_ID);
   $.ajax({
     type: 'GET',
-    url: 'rpc/tree?root_pipeline_id=' + ROOT_PIPELINE_ID,
+    url: 'rpc/tree?root_pipeline_id=' + ROOT_PIPELINE_ID + '&depth=' + DEPTH,
     dataType: 'text',
     error: function(request, textStatus) {
       getResponseDataJson(textStatus);
@@ -900,7 +914,7 @@ function initStatusDone() {
       // Only do auto-refresh behavior if we're not in a terminal state.
       window.setTimeout(function() {
         var loc = window.location;
-        var search = '?root=' + ROOT_PIPELINE_ID;
+        var search = '?root=' + ROOT_PIPELINE_ID + depthUrlArg();
         loc.replace(loc.protocol + '//' + loc.host + loc.pathname + search);
       }, 30 * 1000);
     }

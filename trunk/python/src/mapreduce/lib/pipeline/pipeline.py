@@ -2894,11 +2894,106 @@ def _get_internal_slot(slot_key=None,
   return output
 
 
-def get_status_tree(root_pipeline_id):
+def db_get_in_batches(keys):
+  """Given an iterable of keys, load the entities in batches and yield them."""
+  batch_size = 50
+  keys = list(keys)
+  key_batches = [keys[n:n + batch_size]
+                 for n in xrange(0, len(keys), batch_size)]
+  for key_batch in key_batches:
+    for entity in db.get(key_batch):
+      yield entity
+
+
+def get_pipelines_within_depth(start_pipeline_key, depth):
+  """Get all pipelines that are at most the given depth.
+
+  Args:
+    start_pipeline_key: The top-level pipeline to start loading from. Normally
+      this is a root pipeline, but this is not strictly necessary.
+    depth: An integer for the maximum depth to load. For example, if depth is
+      2, we load the start pipeline, its children, and its children's children.
+
+  Returns:
+    A 4-tuple: found_pipeline_dict, found_slot_dict, found_barrier_dict,
+      found_status_dict. Each dict maps datastore keys to the relevant entities
+      for the given set of pipelines to load (or, in the case of pipelines and
+      slots, low-memory entity-like objects which are almost as good).
+  """
+  start_pipeline = db.get(start_pipeline_key).truncated_copy()
+  all_pipelines = [start_pipeline]
+
+  last_seen_pipelines = [start_pipeline]
+  for _ in xrange(depth):
+    # BFS on the pipeline tree to find all pipelines we care about.
+    child_pipeline_keys = set()
+    for pipeline in last_seen_pipelines:
+      child_pipeline_keys.update(pipeline.fanned_out)
+    child_pipelines = [pipeline.truncated_copy()
+                       for pipeline in db_get_in_batches(child_pipeline_keys)
+                       if pipeline is not None]
+    last_seen_pipelines = child_pipelines
+    all_pipelines.extend(child_pipelines)
+
+  found_pipeline_dict = {
+    pipeline.key(): pipeline for pipeline in all_pipelines
+  }
+
+  # Load all slots relevant to these pipelines (any referenced in arguments or
+  # outputs).
+  all_slot_keys = set()
+  for pipeline in all_pipelines:
+    slot_strings = []
+    slot_strings.extend(pipeline.params['output_slots'].itervalues())
+    slot_strings.extend([arg['slot_key'] for arg in pipeline.params['args']
+                         if arg['type'] == 'slot'])
+    slot_strings.extend([arg['slot_key']
+                         for arg in pipeline.params['kwargs'].itervalues()
+                         if arg['type'] == 'slot'])
+    all_slot_keys.update(db.Key(key_str) for key_str in slot_strings)
+
+  all_slots = [slot.truncated_copy()
+               for slot in db_get_in_batches(all_slot_keys)
+               if slot is not None]
+  found_slot_dict = {slot.key(): slot for slot in all_slots}
+
+  # Load all barriers relevant to these pipelines (the start and finalize
+  # barriers for each pipeline).
+  all_barrier_keys = set()
+  for pipeline in all_pipelines:
+    all_barrier_keys.add(db.Key.from_path(
+        _BarrierRecord.kind(), _BarrierRecord.START, parent=pipeline.key()))
+    all_barrier_keys.add(db.Key.from_path(
+        _BarrierRecord.kind(), _BarrierRecord.FINALIZE, parent=pipeline.key()))
+
+  all_barriers = [barrier for barrier in db_get_in_batches(all_barrier_keys)
+                  if barrier is not None]
+  found_barrier_dict = {barrier.key(): barrier for barrier in all_barriers}
+
+  # Load the status records for these pipelines.
+  all_status_keys = set()
+  for pipeline in all_pipelines:
+    all_status_keys.add(db.Key.from_path(
+        _StatusRecord.kind(), pipeline.key().name()))
+
+  all_statuses = [status for status in db_get_in_batches(all_status_keys)
+                  if status is not None]
+  found_status_dict = {status.key(): status for status in all_statuses}
+
+  return (found_pipeline_dict, found_slot_dict, found_barrier_dict,
+          found_status_dict)
+
+
+def get_status_tree(root_pipeline_id, depth):
   """Gets the full status tree of a pipeline.
 
   Args:
     root_pipeline_id: The root pipeline ID to get status for.
+    depth: Usually None, indicating that the full pipeline tree should be
+      loaded. If not none, it is an int indicating the max depth to load. This
+      is useful for cases where the full pipeline tree is too large to load at
+      once. If depth is not none, root_pipeline_id is not required to be a root
+      pipeline.
 
   Returns:
     Dictionary with the keys:
@@ -2915,24 +3010,33 @@ def get_status_tree(root_pipeline_id):
     raise PipelineStatusError(
         'Could not find pipeline ID "%s"' % root_pipeline_id)
 
-  if (root_pipeline_key !=
-      _PipelineRecord.root_pipeline.get_value_for_datastore(
-          root_pipeline_record)):
-    raise PipelineStatusError(
-        'Pipeline ID "%s" is not a root pipeline!' % root_pipeline_id)
+  if depth is None:
+    # Common case: load all descendants of the given root pipeline.
+    if (root_pipeline_key !=
+        _PipelineRecord.root_pipeline.get_value_for_datastore(
+            root_pipeline_record)):
+      raise PipelineStatusError(
+          'Pipeline ID "%s" is not a root pipeline!' % root_pipeline_id)
 
-  # Avoid hitting both response size limits and memory limits for large
-  # pipelines by truncating pipeline arguments and slot values while we load
-  # them from the datastore. The get_pipeline_values function below allows the
-  # user to manually load them later if necessary.
-  found_pipeline_dict = dict((stage.key(), stage.truncated_copy()) for stage in
-      _PipelineRecord.all().filter('root_pipeline =', root_pipeline_key))
-  found_slot_dict = dict((slot.key(), slot.truncated_copy()) for slot in
-      _SlotRecord.all().filter('root_pipeline =', root_pipeline_key))
-  found_barrier_dict = dict((barrier.key(), barrier) for barrier in
-      _BarrierRecord.all().filter('root_pipeline =', root_pipeline_key))
-  found_status_dict = dict((status.key(), status) for status in
-      _StatusRecord.all().filter('root_pipeline =', root_pipeline_key))
+    # Avoid hitting both response size limits and memory limits for large
+    # pipelines by truncating pipeline arguments and slot values while we load
+    # them from the datastore. The get_pipeline_values function below allows
+    # the user to manually load them later if necessary.
+    found_pipeline_dict = dict(
+        (stage.key(), stage.truncated_copy()) for stage in
+          _PipelineRecord.all().filter('root_pipeline =', root_pipeline_key))
+    found_slot_dict = dict((slot.key(), slot.truncated_copy()) for slot in
+        _SlotRecord.all().filter('root_pipeline =', root_pipeline_key))
+    found_barrier_dict = dict((barrier.key(), barrier) for barrier in
+        _BarrierRecord.all().filter('root_pipeline =', root_pipeline_key))
+    found_status_dict = dict((status.key(), status) for status in
+        _StatusRecord.all().filter('root_pipeline =', root_pipeline_key))
+  else:
+    # If the user specified a depth, the given pipeline isn't required to be a
+    # root pipeline, and we load the entities in a different way that limits
+    # them to the given depth.
+    (found_pipeline_dict, found_slot_dict, found_barrier_dict,
+     found_status_dict) = get_pipelines_within_depth(root_pipeline_key, depth)
 
   # Breadth-first traversal of _PipelineRecord instances by following
   # _PipelineRecord.fanned_out property values.
@@ -2948,9 +3052,11 @@ def get_status_tree(root_pipeline_id):
         # the Datastore but were never run due to mid-flight task failures.
         child_pipeline_record = found_pipeline_dict.get(child_pipeline_key)
         if child_pipeline_record is None:
-          logging.warning(
-              'Pipeline ID "%s" points to child ID "%s" which does not exist.'
-              % (pipeline_record.key().name(), child_pipeline_key.name()))
+          # If we limited the depth, we expect missing children, so don't warn.
+          if depth is None:
+            logging.warning(
+                'Pipeline ID "%s" points to child ID "%s" which does not exist.'
+                % (pipeline_record.key().name(), child_pipeline_key.name()))
           continue
         expand_stack.append(child_pipeline_record)
         valid_pipeline_keys.add(child_pipeline_key)

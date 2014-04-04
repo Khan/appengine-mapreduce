@@ -153,8 +153,12 @@ class _TreeStatusHandler(_BaseRpcHandler):
 
   def handle(self):
     import pipeline  # Break circular dependency
+    try:
+      depth = int(self.request.get('depth'))
+    except ValueError:
+      depth = None
     self.json_response.update(
-        pipeline.get_status_tree(self.request.get('root_pipeline_id')))
+        pipeline.get_status_tree(self.request.get('root_pipeline_id'), depth))
 
 
 class _ClassPathListHandler(_BaseRpcHandler):

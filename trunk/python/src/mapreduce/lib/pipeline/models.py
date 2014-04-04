@@ -215,6 +215,7 @@ class _LowMemorySlotRecord(object):
   (if it exists) is truncated.
   """
   def __init__(self, slot_record):
+    self.key_value = slot_record.key()
     # Skip root pipeline since ReferenceProperties are tricky.
     self.filler_pipeline_key = slot_record.filler_pipeline_key
     self.status = slot_record.status
@@ -223,6 +224,9 @@ class _LowMemorySlotRecord(object):
     if self.status == _SlotRecord.FILLED:
       self.value = truncate_value(slot_record.value)
     self.fill_time = slot_record.fill_time
+
+  def key(self):
+    return self.key_value
 
 
 class _BarrierRecord(db.Model):

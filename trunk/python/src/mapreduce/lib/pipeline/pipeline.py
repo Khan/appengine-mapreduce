@@ -1499,8 +1499,7 @@ class _PipelineContext(object):
         continue
       blocking_slot_dict[slot_record.key()] = slot_record
 
-    task_list = []
-    updated_barriers = []
+    barriers_to_trigger = []
     for barrier in results:
       all_ready = True
       for blocking_slot_key in barrier.blocking_slots:
@@ -1520,27 +1519,39 @@ class _PipelineContext(object):
       # point in this flow; this rolls forward the state and de-dupes using
       # the task name tombstones.
       if all_ready:
-        if barrier.status != _BarrierRecord.FIRED:
-          barrier.status = _BarrierRecord.FIRED
-          barrier.trigger_time = self._gettime()
-          updated_barriers.append(barrier)
+        barriers_to_trigger.append(barrier)
 
-        purpose = barrier.key().name()
-        if purpose == _BarrierRecord.START:
-          path = self.pipeline_handler_path
-          countdown = None
-        else:
-          path = self.finalized_handler_path
-          # NOTE: Wait one second before finalization to prevent
-          # contention on the _PipelineRecord entity.
-          countdown = 1
-        pipeline_key = _BarrierRecord.target.get_value_for_datastore(barrier)
-        task_list.append(taskqueue.Task(
-            url=path,
-            countdown=countdown,
-            name='ae-barrier-fire-%s-%s' % (pipeline_key.name(), purpose),
-            params=dict(pipeline_key=pipeline_key, purpose=purpose),
-            headers={'X-Ae-Pipeline-Key': pipeline_key}))
+    pipeline_keys_to_trigger = [
+        _BarrierRecord.target.get_value_for_datastore(barrier)
+        for barrier in barriers_to_trigger]
+    pipelines_to_trigger = dict(zip(
+        pipeline_keys_to_trigger, db.get(pipeline_keys_to_trigger)))
+    task_list = []
+    updated_barriers = []
+    for barrier in barriers_to_trigger:
+      if barrier.status != _BarrierRecord.FIRED:
+        barrier.status = _BarrierRecord.FIRED
+        barrier.trigger_time = self._gettime()
+        updated_barriers.append(barrier)
+
+      purpose = barrier.key().name()
+      if purpose == _BarrierRecord.START:
+        path = self.pipeline_handler_path
+        countdown = None
+      else:
+        path = self.finalized_handler_path
+        # NOTE: Wait one second before finalization to prevent
+        # contention on the _PipelineRecord entity.
+        countdown = 1
+      pipeline_key = _BarrierRecord.target.get_value_for_datastore(barrier)
+      target = pipelines_to_trigger[pipeline_key].params.get('target')
+      task_list.append(taskqueue.Task(
+          url=path,
+          countdown=countdown,
+          name='ae-barrier-fire-%s-%s' % (pipeline_key.name(), purpose),
+          params=dict(pipeline_key=pipeline_key, purpose=purpose),
+          headers={'X-Ae-Pipeline-Key': pipeline_key},
+          target=target))
 
     # Blindly overwrite _BarrierRecords that have an updated status. This is
     # acceptable because by this point all finalization barriers for
@@ -2461,7 +2472,8 @@ class _PipelineContext(object):
             params=dict(pipeline_key=pipeline_key,
                         purpose=_BarrierRecord.START,
                         attempt=pipeline_record.current_attempt),
-            headers={'X-Ae-Pipeline-Key': pipeline_key})
+            headers={'X-Ae-Pipeline-Key': pipeline_key},
+            target=pipeline_record.params.get('target'))
         task.add(queue_name=self.queue_name, transactional=True)
 
       pipeline_record.put()
@@ -2569,13 +2581,17 @@ class _FanoutHandler(webapp.RequestHandler):
       for index in child_indexes:
         all_pipeline_keys.add(str(parent.fanned_out[index]))
 
+    pipeline_key_list = list(all_pipeline_keys)
+    pipelines_to_run = dict(zip(pipeline_key_list, db.get(pipeline_key_list)))
     all_tasks = []
     for pipeline_key in all_pipeline_keys:
+      target = pipelines_to_run[pipeline_key].params.get('target')
       all_tasks.append(taskqueue.Task(
           url=context.pipeline_handler_path,
           params=dict(pipeline_key=pipeline_key),
           headers={'X-Ae-Pipeline-Key': pipeline_key},
-          name='ae-pipeline-fan-out-' + db.Key(pipeline_key).name()))
+          name='ae-pipeline-fan-out-' + db.Key(pipeline_key).name(),
+          target=target))
 
     batch_size = 100  # Limit of taskqueue API bulk add.
     for i in xrange(0, len(all_tasks), batch_size):

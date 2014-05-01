@@ -434,13 +434,11 @@ class Pipeline(object):
     self._context = None
     self._result_status = None
     self._set_class_path()
-    # Introspectively set the target to the current version we're running on so
-    # pipelines stick to the version it started. However, when spawning a root
-    # pipeline explicitly, an unspecified target means that the default queue
-    # target should be used, so we need to track whether the target was
-    # assigned explicitly.
-    self._target = mr_util._get_task_target()
-    self._is_default_target = True
+    # Introspectively set the target so pipelines stick to the version it
+    # started. Note that this mechanism only works if the task queue has no
+    # target specified in queue.yaml, since targets in queue.yaml will override
+    # task targets.
+    self.target = mr_util._get_task_target()
 
     if _TEST_MODE:
       self._context = _PipelineContext('', 'default', '')
@@ -475,15 +473,6 @@ class Pipeline(object):
     if self._context:
       return self._context.queue_name
     return None
-
-  @property
-  def target(self):
-    return self._target
-
-  @target.setter
-  def target(self, value):
-    self._target = value
-    self._is_default_target = False
 
   @property
   def base_path(self):
@@ -627,14 +616,6 @@ class Pipeline(object):
         idempotence_key.encode('utf-8')
       except UnicodeDecodeError:
         idempotence_key = hashlib.sha1(idempotence_key).hexdigest()
-
-    # This code gets run when launching a root pipeline explicitly, and in that
-    # case, it's better for the target to be decided by the queue than to use
-    # the currently-running version, so we set it back in that case. We put a
-    # special case here rather than when spawning child pipelines because this
-    # case is easier to detect.
-    if self._is_default_target:
-      self.target = None
 
     pipeline_key = db.Key.from_path(_PipelineRecord.kind(), idempotence_key)
     context = _PipelineContext('', queue_name, base_path)

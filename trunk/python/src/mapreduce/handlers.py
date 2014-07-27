@@ -581,7 +581,7 @@ class MapperWorkerCallbackHandler(base_handler.HugeTaskHandler):
             taskqueue.Error,
             runtime.DeadlineExceededError,
             apiproxy_errors.Error), e:
-      logging.error(
+      logging.warning(
           "Can't transactionally continue shard. "
           "Will retry slice %s %s for the %s time.",
           tstate.shard_id,
@@ -607,10 +607,10 @@ class MapperWorkerCallbackHandler(base_handler.HugeTaskHandler):
       A _TASK_STATE enum. RETRY_SHARD if shard should be retried.
     RETRY_TASK if slice should be retried. FAIL_TASK otherwise.
     """
-    logging.error("Shard %s got error.", shard_state.shard_id)
+    logging.warning("Shard %s got error.", shard_state.shard_id)
     # This logs the callstack leading up to the exception. Thus it excludes the
     # call frames generated to handle the retry.
-    logging.error(traceback.format_exc())
+    logging.warning(traceback.format_exc())
 
     # Fail fast.
     if type(e) is errors.FailJobError:
@@ -681,7 +681,7 @@ class MapperWorkerCallbackHandler(base_handler.HugeTaskHandler):
     """
     if (shard_state.slice_retries + 1 <
         parameters.config.TASK_MAX_DATA_PROCESSING_ATTEMPTS):
-      logging.error(
+      logging.warning(
           "Slice %s %s failed for the %s of up to %s attempts "
           "(%s of %s taskqueue execution attempts). "
           "Will retry now.",

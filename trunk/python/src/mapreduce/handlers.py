@@ -276,11 +276,18 @@ class MapperWorkerCallbackHandler(base_handler.HugeTaskHandler):
     assert shard_state.slice_start_time is not None
     assert shard_state.slice_request_id is not None
     request_ids = [shard_state.slice_request_id]
-    logs = list(logservice.fetch(
-        request_ids=request_ids,
-        # TODO(user): Remove after b/8173230 is fixed.
-        module_versions=[(os.environ["CURRENT_MODULE_ID"],
-                          modules.get_current_version_name())]))
+    logs = None
+    try:
+      logs = list(logservice.fetch(
+            request_ids=request_ids,
+            # TODO(user): Remove after b/8173230 is fixed.
+            module_versions=[(os.environ["CURRENT_MODULE_ID"],
+                              modules.get_current_version_name())]))
+    except (apiproxy_errors.FeatureNotEnabledError,
+        apiproxy_errors.CapabilityDisabledError) as e:
+      # Managed VMs do not have access to the logservice API
+      # See https://groups.google.com/forum/#!topic/app-engine-managed-vms/r8i65uiFW0w
+      logging.warning("Ignoring exception: %s", e)
 
     if not logs or not logs[0].finished:
       return False
